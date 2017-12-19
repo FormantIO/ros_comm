@@ -438,9 +438,10 @@ class ServiceProxy(_Service):
                 },
                 'logging': True,
             },
-            service_name="Ian-ROS-Tracing-Experiment",
+            service_name=rospy.names.get_name()
         )
         config.initialize_tracer()
+        rospy.on_shutdown(lambda: opentracing.tracer.close())
         #### /OPENTRACING ####
 
     def wait_for_service(self, timeout=None):
@@ -579,7 +580,6 @@ class ServiceProxy(_Service):
             raise
         finally:
             span.finish()
-            time.sleep(1.0)
         #### /OPENTRACING ####
         return responses[0]
 
@@ -635,9 +635,10 @@ class ServiceImpl(_Service):
                 },
                 'logging': True,
             },
-            service_name="Ian-ROS-Tracing-Experiment",
+            service_name=rospy.names.get_name()
         )
         config.initialize_tracer()
+        rospy.on_shutdown(lambda: opentracing.tracer.close())
         #### /OPENTRACING ####
 
     # TODO: should consider renaming to unregister
