@@ -32,6 +32,14 @@
 
 """Internal use: Service-specific extensions for TCPROS support"""
 
+#### OPENTRACING ####
+import opentracing
+import logging
+from opentracing_instrumentation.request_context import get_current_span, span_in_stack_context
+from jaeger_client import Config
+
+#### /OPENTRACING ####
+
 import io
 import socket
 import struct
@@ -410,9 +418,30 @@ class ServiceProxy(_Service):
             if not headers:
                 headers = {}
             headers['persistent'] = '1'
+        #### OPENTRACING ####
+        self.headers = headers or {}
         self.protocol = TCPROSServiceClient(self.resolved_name,
-                                            self.service_class, headers=headers)
+                                            self.service_class, headers=self.headers)
+        #### /OPENTRACING ####
         self.transport = None #for saving persistent connections
+
+        #### OPENTRACING ####
+        log_level = logging.DEBUG
+        logging.getLogger('').handlers = []
+        logging.basicConfig(format='%(asctime)s %(message)s', level=log_level)
+
+        config = Config(
+            config={ # usually read from some yaml config
+                'sampler': {
+                    'type': 'const',
+                    'param': 1,
+                },
+                'logging': True,
+            },
+            service_name="Ian-ROS-Tracing-Experiment",
+        )
+        config.initialize_tracer()
+        #### /OPENTRACING ####
 
     def wait_for_service(self, timeout=None):
         wait_for_service(self.resolved_name, timeout=timeout)
@@ -490,6 +519,19 @@ class ServiceProxy(_Service):
         # convert args/kwds to request message class
         request = rospy.msg.args_kwds_to_message(self.request_class, args, kwds) 
             
+        #### OPENTRACING #####
+        # Get parent span from thread-local context (if there is one)
+        parent_span = get_current_span()
+        # Create a new span for this request
+        span = opentracing.tracer.start_span(operation_name=self.resolved_name + "_client", child_of=parent_span)
+        span.log_event('service invoked', payload={'request': str(request)})
+        # Inject headers for this request
+        headers = self.headers
+        opentracing.tracer.inject(span, opentracing.Format.HTTP_HEADERS, headers)
+        rospy.logerr("injected headers: %s", headers)
+        self.protocol = TCPROSServiceClient(self.resolved_name,
+                                            self.service_class, headers=headers)
+        #### /OPENTRACING #####
         # initialize transport
         if self.transport is None:
             service_uri = self._get_service_uri(request)
@@ -511,22 +553,34 @@ class ServiceProxy(_Service):
         self.seq += 1
         transport.send_message(request, self.seq)
 
+        #### OPENTRACING ####
         try:
-            responses = transport.receive_once()
-            if len(responses) == 0:
-                raise ServiceException("service [%s] returned no response"%self.resolved_name)
-            elif len(responses) > 1:
-                raise ServiceException("service [%s] returned multiple responses: %s"%(self.resolved_name, len(responses)))
-        except rospy.exceptions.TransportException as e:
-            # convert lower-level exception to exposed type
-            if rospy.core.is_shutdown():
-                raise rospy.exceptions.ROSInterruptException("node shutdown interrupted service call")
-            else:
-                raise ServiceException("transport error completing service call: %s"%(str(e)))
+        #### /OPENTRACING ####
+            try:
+                responses = transport.receive_once()
+                if len(responses) == 0:
+                    raise ServiceException("service [%s] returned no response"%self.resolved_name)
+                elif len(responses) > 1:
+                    raise ServiceException("service [%s] returned multiple responses: %s"%(self.resolved_name, len(responses)))
+            except rospy.exceptions.TransportException as e:
+                # convert lower-level exception to exposed type
+                if rospy.core.is_shutdown():
+                    raise rospy.exceptions.ROSInterruptException("node shutdown interrupted service call")
+                else:
+                    raise ServiceException("transport error completing service call: %s"%(str(e)))
+            finally:
+                if not self.persistent:
+                    transport.close()
+                    self.transport = None
+        #### OPENTRACING ####
+        except Exception as e:
+            span.log(event='exception', payload=e)
+            span.set_tag('error', 'true')
+            raise
         finally:
-            if not self.persistent:
-                transport.close()
-                self.transport = None
+            span.finish()
+            time.sleep(1.0)
+        #### /OPENTRACING ####
         return responses[0]
 
     
@@ -567,6 +621,24 @@ class ServiceImpl(_Service):
         self.protocol = TCPService(self.resolved_name, service_class, self.buff_size)
 
         logdebug("[%s]: new Service instance"%self.resolved_name)
+
+        #### OPENTRACING ####
+        log_level = logging.DEBUG
+        logging.getLogger('').handlers = []
+        logging.basicConfig(format='%(asctime)s %(message)s', level=log_level)
+
+        config = Config(
+            config={ # usually read from some yaml config
+                'sampler': {
+                    'type': 'const',
+                    'param': 1,
+                },
+                'logging': True,
+            },
+            service_name="Ian-ROS-Tracing-Experiment",
+        )
+        config.initialize_tracer()
+        #### /OPENTRACING ####
 
     # TODO: should consider renaming to unregister
 
@@ -625,6 +697,9 @@ class ServiceImpl(_Service):
             # ok byte
             transport.write_buff.write(struct.pack('<B', 1))
             transport.send_message(response, self.seq)
+            #### OPENTRACING ####
+            get_current_span().log_event('service executed', payload={'response': str(response)})
+            #### /OPENTRACING ####
         except ServiceException as e:
             rospy.core.rospydebug("handler raised ServiceException: %s"%(e))
             self._write_service_error(transport, "service cannot process request: %s"%e)
@@ -652,21 +727,37 @@ class ServiceImpl(_Service):
             #this will likely do more in the future
             transport.close()
             return
-        handle_done = False
-        while not handle_done:
-            try:
-                requests = transport.receive_once()
-                for request in requests:
-                    self._handle_request(transport, request)
-                if not persistent:
-                    handle_done = True
-            except rospy.exceptions.TransportTerminated as e:
-                if not persistent:
-                    logerr("incoming connection failed: %s"%e)
-                logdebug("service[%s]: transport terminated"%self.resolved_name)
-                handle_done = True
-        transport.close()
 
+        #### OPENTRACING ####
+        extracted_context = opentracing.tracer.extract(
+            format=opentracing.Format.HTTP_HEADERS,
+            carrier=header
+        )
+        extracted_context_str = '{:x}:{:x}:{:x}:{:x}'.format(extracted_context.trace_id, extracted_context.span_id, (extracted_context.parent_id or 0), extracted_context.flags)
+        rospy.core.logerr("extracted_context: %s" % extracted_context_str)
+
+        span = opentracing.tracer.start_span(operation_name=self.resolved_name, child_of=extracted_context)
+        with span_in_stack_context(span) as deactivate_cb:
+        #### /OPENTRACING ####
+
+            handle_done = False
+            while not handle_done:
+                try:
+                    requests = transport.receive_once()
+                    for request in requests:
+                        self._handle_request(transport, request)
+                    if not persistent:
+                        handle_done = True
+                except rospy.exceptions.TransportTerminated as e:
+                    if not persistent:
+                        logerr("incoming connection failed: %s"%e)
+                    logdebug("service[%s]: transport terminated"%self.resolved_name)
+                    handle_done = True
+            transport.close()
+            #### OPENTRACING ####
+            deactivate_cb()
+            span.finish()
+            #### /OPENTRACING ####
 
 class Service(ServiceImpl):
     """
