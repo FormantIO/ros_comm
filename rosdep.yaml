@@ -1,0 +1,14 @@
+jaeger-client:
+  debian:
+    pip:
+      packages: [jaeger-client]
+  ubuntu:
+    pip:
+      packages: [jaeger-client]
+opentracing_instrumentation:
+  debian:
+    pip:
+      packages: [opentracing_instrumentation]
+  ubuntu:
+    pip:
+      packages: [opentracing_instrumentation]

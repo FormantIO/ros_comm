@@ -5,21 +5,19 @@ In the future, the same should be achievable (in Python, at least) by monkey-pat
 ## Clone the Figure fork of ros_comm
 ```bash
 cd src/
-git clone git@github.com:FigureWorks/ros_comm.git
+git clone git@github.com:FormantIO/ros_comm.git
+cd ros_comm
 git checkout opentracing
-cd ..
 ```
 
 ## Configure rosdep to use a local rosdep.yaml file
 ```bash
-sudo echo "yaml file:///home/${USER}/workspaces/rosdep.yaml" > /etc/ros/rosdep/sources.list.d/10-local.list
+sudo bash -c 'echo "yaml file://$(realpath rosdep.yaml)" > /etc/ros/rosdep/sources.list.d/10-ros_comm.list'
 ```
-
-## Download rosdep.yaml from Figure
-Download https://raw.githubusercontent.com/FigureWorks/elliot-ros/master/workspaces/rosdep.yaml into `~/workspaces`
 
 ## Install rosdeps
 ```bash
+rosdep update
 rosdep install --from-paths src --ignore-src -r -y
 ```
 
@@ -32,7 +30,7 @@ source devel/setup.bash
 ## Confirm you are successfully overlaying rospy
 ```bash
 rospack find rospy
-# should return a directory in ~/workspaces
+# should return a directory in your workspace
 ```
 
 ## Run the Jaeger collector, server, and UI
