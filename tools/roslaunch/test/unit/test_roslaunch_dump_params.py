@@ -53,7 +53,7 @@ class TestDumpParams(unittest.TestCase):
         o, e = p.communicate()
         self.assert_(p.returncode == 0, "Return code nonzero for param dump! Code: %d" % (p.returncode))
 
-        self.assertEquals({'/noop': 'noop'}, yaml.load(o))
+        self.assertEquals({'/noop': 'noop'}, yaml.safe_load(o))
 
         p = Popen([cmd, '--dump-params', 'roslaunch', 'test-dump-rosparam.launch'], stdout = PIPE)
         o, e = p.communicate()
@@ -77,6 +77,10 @@ class TestDumpParams(unittest.TestCase):
             '/node_rosparam/dict1/shoulders': 2,
             '/node_rosparam/dict1/knees': 3,
             '/node_rosparam/dict1/toes': 4,
+            '/node_rosparam/tilde1': 'foo',
+            '/node_rosparam/local_param': 'baz',
+
+            '/node_rosparam2/tilde1': 'foo',
 
             '/inline_str': 'value1',
             '/inline_list': [1, 2, 3, 4],
@@ -91,7 +95,7 @@ class TestDumpParams(unittest.TestCase):
             '/noparam1': 'value1',
             '/noparam2': 'value2',
             }
-        output_val = yaml.load(o)
+        output_val = yaml.safe_load(o)
         if not val == output_val:
             for k, v in val.items():
                 if k not in output_val:
@@ -99,3 +103,6 @@ class TestDumpParams(unittest.TestCase):
                 elif v != output_val[k]:
                     self.fail("key [%s] value [%s] does not match output: %s"%(k, v, output_val[k])) 
         self.assertEquals(val, output_val)
+        for k in ('/node_rosparam/tilde2', '/node_rosparam2/tilde2', '/node_rosparam2/local_param'):
+            if k in output_val:
+                self.fail("key [%s] should not be in output: %s"%(k, output_val))

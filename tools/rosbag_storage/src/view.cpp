@@ -29,11 +29,8 @@
 #include "rosbag/bag.h"
 #include "rosbag/message_instance.h"
 
-#include <boost/foreach.hpp>
 #include <set>
 #include <assert.h>
-
-#define foreach BOOST_FOREACH
 
 using std::map;
 using std::string;
@@ -59,11 +56,24 @@ View::iterator::iterator(View* view, bool end) : view_(view), view_revision_(0),
 
 View::iterator::iterator(const iterator& i) : view_(i.view_), iters_(i.iters_), view_revision_(i.view_revision_), message_instance_(NULL) { }
 
+View::iterator &View::iterator::operator=(iterator const& i) {
+    if (this != &i) {
+        view_ = i.view_;
+        iters_ = i.iters_;
+        view_revision_ = i.view_revision_;
+        if (message_instance_ != NULL) {
+            delete message_instance_;
+            message_instance_ = NULL;
+        }
+    }
+    return *this;
+}
+
 void View::iterator::populate() {
     assert(view_ != NULL);
 
     iters_.clear();
-    foreach(MessageRange const* range, view_->ranges_)
+    for (MessageRange const* range : view_->ranges_)
         if (range->begin != range->end)
             iters_.push_back(ViewIterHelper(range->begin, range));
 
@@ -75,7 +85,7 @@ void View::iterator::populateSeek(multiset<IndexEntry>::const_iterator iter) {
     assert(view_ != NULL);
 
     iters_.clear();
-    foreach(MessageRange const* range, view_->ranges_) {
+    for (MessageRange const* range : view_->ranges_) {
         multiset<IndexEntry>::const_iterator start = std::lower_bound(range->begin, range->end, iter->time, IndexEntryCompare());
         if (start != range->end)
             iters_.push_back(ViewIterHelper(start, range));
@@ -123,7 +133,7 @@ void View::iterator::increment() {
     {
         std::multiset<IndexEntry>::const_iterator last_iter = iters_.back().iter;
     
-        while (iters_.back().iter == last_iter)
+        while (!iters_.empty() && iters_.back().iter == last_iter)
         {
             iters_.back().iter++;
             if (iters_.back().iter == iters_.back().range->end)
@@ -164,9 +174,9 @@ View::View(Bag const& bag, boost::function<bool(ConnectionInfo const*)> query, r
 }
 
 View::~View() {
-    foreach(MessageRange* range, ranges_)
+    for (MessageRange* range : ranges_)
         delete range;
-    foreach(BagQuery* query, queries_)
+    for (BagQuery* query : queries_)
         delete query;
 }
 
@@ -177,7 +187,7 @@ ros::Time View::getBeginTime()
 
   ros::Time begin = ros::TIME_MAX;
 
-  foreach (rosbag::MessageRange* range, ranges_)
+  for (rosbag::MessageRange* range : ranges_)
   {
     if (range->begin->time < begin)
       begin = range->begin->time;
@@ -192,7 +202,7 @@ ros::Time View::getEndTime()
 
   ros::Time end = ros::TIME_MIN;
 
-  foreach (rosbag::MessageRange* range, ranges_)
+  for (rosbag::MessageRange* range : ranges_)
   {
     std::multiset<IndexEntry>::const_iterator e = range->end;
     e--;
@@ -221,7 +231,7 @@ uint32_t View::size() {
   {
     size_cache_ = 0;
 
-    foreach (MessageRange* range, ranges_)
+    for (MessageRange* range : ranges_)
     {
       size_cache_ += std::distance(range->begin, range->end);
     }
@@ -236,7 +246,7 @@ void View::addQuery(Bag const& bag, ros::Time const& start_time, ros::Time const
     if ((bag.getMode() & bagmode::Read) != bagmode::Read)
         throw BagException("Bag not opened for reading");
 
-	boost::function<bool(ConnectionInfo const*)> query = TrueQuery();
+    boost::function<bool(ConnectionInfo const*)> query = TrueQuery();
 
     queries_.push_back(new BagQuery(&bag, Query(query, start_time, end_time), bag.bag_revision_));
 
@@ -268,10 +278,11 @@ void View::updateQueries(BagQuery* q) {
         multiset<IndexEntry> const& index = j->second;
 
         // lower_bound/upper_bound do a binary search to find the appropriate range of Index Entries given our time range
-
-        std::multiset<IndexEntry>::const_iterator begin = std::lower_bound(index.begin(), index.end(), q->query.getStartTime(), IndexEntryCompare());
-        std::multiset<IndexEntry>::const_iterator end   = std::upper_bound(index.begin(), index.end(), q->query.getEndTime(),   IndexEntryCompare());
-
+        IndexEntry start_time_lookup_entry = { q->query.getStartTime(), 0, 0 };
+        IndexEntry end_time_lookup_entry   = { q->query.getEndTime()  , 0, 0 };
+        std::multiset<IndexEntry>::const_iterator begin = index.lower_bound(start_time_lookup_entry);
+        std::multiset<IndexEntry>::const_iterator end   = index.upper_bound(end_time_lookup_entry);
+	    
         // Make sure we are at the right beginning
         while (begin != index.begin() && begin->time >= q->query.getStartTime())
         {
@@ -307,7 +318,7 @@ void View::updateQueries(BagQuery* q) {
 }
 
 void View::update() {
-    foreach(BagQuery* query, queries_) {
+    for (BagQuery* query : queries_) {
         if (query->bag->bag_revision_ != query->bag_revision) {
             updateQueries(query);
             query->bag_revision = query->bag->bag_revision_;
@@ -318,8 +329,9 @@ void View::update() {
 std::vector<const ConnectionInfo*> View::getConnections()
 {
   std::vector<const ConnectionInfo*> connections;
+  connections.reserve(ranges_.size());
 
-  foreach(MessageRange* range, ranges_)
+  for (MessageRange* range : ranges_)
   {
     connections.push_back(range->connection_info);
   }

@@ -58,6 +58,8 @@ from .core import is_shutdown, signal_shutdown, \
     get_node_uri, get_ros_root, \
     logdebug, logwarn, loginfo, logout, logerr, logfatal, \
     logdebug_throttle, logwarn_throttle, loginfo_throttle, logerr_throttle, logfatal_throttle, \
+    logdebug_throttle_identical, logwarn_throttle_identical, loginfo_throttle_identical, logerr_throttle_identical, logfatal_throttle_identical, \
+    logdebug_once, logwarn_once, loginfo_once, logerr_once, logfatal_once, \
     parse_rosrpc_uri
 from .exceptions import *
 from .msg import AnyMsg
@@ -94,7 +96,7 @@ __all__ = [
     'INFO',
     'WARN',
     'ERROR',
-    'FATAL'
+    'FATAL',
     'is_shutdown',
     'signal_shutdown',
     'get_node_uri',
@@ -105,6 +107,9 @@ __all__ = [
     'logdebug_throttle',
     'logwarn_throttle', 'loginfo_throttle',
     'logerr_throttle', 'logfatal_throttle',
+    'logdebug_once',
+    'logwarn_once', 'loginfo_once',
+    'logerr_once', 'logfatal_once',
     'parse_rosrpc_uri',
     'MasterProxy',
     'NodeProxy',    

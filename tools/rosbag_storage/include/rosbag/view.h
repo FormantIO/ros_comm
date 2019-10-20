@@ -45,7 +45,7 @@
 
 namespace rosbag {
 
-class ROSBAG_DECL View
+class ROSBAG_STORAGE_DECL View
 {
     friend class Bag;
 
@@ -57,12 +57,13 @@ public:
      * MessageInstance is destroyed.  You should never store the
      * pointer to this reference.
      */
-    class iterator : public boost::iterator_facade<iterator,
+    class ROSBAG_STORAGE_DECL iterator : public boost::iterator_facade<iterator,
                                                    MessageInstance,
                                                    boost::forward_traversal_tag>
     {
     public:
         iterator(iterator const& i);
+        iterator &operator=(iterator const& i);
         iterator();
         ~iterator();
 

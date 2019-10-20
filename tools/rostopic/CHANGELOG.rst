@@ -2,6 +2,49 @@
 Changelog for package rostopic
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+1.14.3 (2018-08-06)
+-------------------
+
+1.14.2 (2018-06-06)
+-------------------
+* fix the count of subscribers, regression from 1.14.0 (`#1407 <https://github.com/ros/ros_comm/issues/1407>`_)
+
+1.14.1 (2018-05-21)
+-------------------
+
+1.14.0 (2018-05-21)
+-------------------
+* add public get_topic_list() function for use in other scripts (`#1154 <https://github.com/ros/ros_comm/issues/1154>`_)
+
+1.13.6 (2018-02-05)
+-------------------
+* add --tcpnodelay TransportHint option to hz and delay commands (`#1296 <https://github.com/ros/ros_comm/issues/1296>`_)
+* remove unreachable exceptions (`#1260 <https://github.com/ros/ros_comm/issues/1260>`_)
+
+1.13.5 (2017-11-09)
+-------------------
+
+1.13.4 (2017-11-02)
+-------------------
+
+1.13.3 (2017-10-25)
+-------------------
+
+1.13.2 (2017-08-15)
+-------------------
+* fix rostopic hz and bw in Python 3 (`#1126 <https://github.com/ros/ros_comm/issues/1126>`_)
+* update tests to match stringify changes (`#1125 <https://github.com/ros/ros_comm/issues/1125>`_)
+
+1.13.1 (2017-07-27)
+-------------------
+* fix rostopic prining long integers (`#1110 <https://github.com/ros/ros_comm/pull/1110>`_)
+
+1.13.0 (2017-02-22)
+-------------------
+
+1.12.7 (2017-02-17)
+-------------------
+
 1.12.6 (2016-10-26)
 -------------------
 * fix typo of arg for _str_plot function (`#915 <https://github.com/ros/ros_comm/issues/915>`_)

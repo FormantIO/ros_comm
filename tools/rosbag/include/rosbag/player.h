@@ -39,6 +39,8 @@
 #if !defined(_MSC_VER)
   #include <termios.h>
   #include <unistd.h>
+#else
+  #include <windows.h>
 #endif
 #include <time.h>
 
@@ -50,6 +52,8 @@
 #include <std_srvs/SetBool.h>
 
 #include "rosbag/bag.h"
+
+#include <topic_tools/shape_shifter.h>
 
 #include "rosbag/time_translator.h"
 #include "rosbag/macros.h"
@@ -90,6 +94,8 @@ struct ROSBAG_DECL PlayerOptions
     float    duration;
     bool     keep_alive;
     bool     wait_for_subscribers;
+    std::string rate_control_topic;
+    float    rate_control_max_delay;
     ros::Duration skip_empty;
 
     std::vector<std::string> bags;
@@ -173,6 +179,10 @@ private:
     void setupTerminal();
     void restoreTerminal();
 
+    void updateRateTopicTime(const ros::MessageEvent<topic_tools::ShapeShifter const>& msg_event);
+
+    void advertise(const ConnectionInfo* c);
+
     void doPublish(rosbag::MessageInstance const& m);
 
     void doKeepAlive();
@@ -195,12 +205,16 @@ private:
     ros::ServiceServer pause_service_;
 
     bool paused_;
+    bool delayed_;
 
     bool pause_for_topics_;
 
     bool pause_change_requested_;
 
     bool requested_pause_state_;
+
+    ros::Subscriber rate_control_sub_;
+    ros::Time last_rate_control_;
 
     ros::WallTime paused_time_;
 

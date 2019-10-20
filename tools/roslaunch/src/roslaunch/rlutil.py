@@ -59,7 +59,7 @@ def check_log_disk_usage():
     """
     try:
         d = rospkg.get_log_dir()
-        roslaunch.core.printlog("Checking log directory for disk usage. This may take awhile.\nPress Ctrl-C to interrupt") 
+        roslaunch.core.printlog("Checking log directory for disk usage. This may take a while.\nPress Ctrl-C to interrupt") 
         disk_usage = rosclean.get_disk_usage(d)
         # warn if over a gig
         if disk_usage > 1073741824:
@@ -219,10 +219,10 @@ def check_roslaunch(f, use_test_depends=False):
             print(e, file=sys.stderr)
             miss_all = True
         if miss_all:
-            print("Missing package dependencies: %s/package.xml: %s"%(pkg, ', '.join(miss)), file=sys.stderr)
+            roslaunch.core.printerrlog("Missing package dependencies: %s/package.xml: %s"%(pkg, ', '.join(miss)))
             errors.append("Missing package dependencies: %s/package.xml: %s"%(pkg, ', '.join(miss)))
         elif miss:
-            print("Missing package dependencies: %s/package.xml: %s (notify upstream maintainer)"%(pkg, ', '.join(miss)), file=sys.stderr)
+            roslaunch.core.printerrlog("Missing package dependencies: %s/package.xml: %s (notify upstream maintainer)"%(pkg, ', '.join(miss)))
     
     # load all node defs
     nodes = []

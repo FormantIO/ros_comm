@@ -132,9 +132,11 @@ struct TimerEvent
 {
   Time last_expected;                     ///< In a perfect world, this is when the last callback should have happened
   Time last_real;                         ///< When the last callback actually happened
+  Time last_expired;                      ///< When the last timer actually expired and the callback was added to the queue
 
   Time current_expected;                  ///< In a perfect world, this is when the current callback should be happening
   Time current_real;                      ///< This is when the current callback was actually called (Time::now() as of the beginning of the callback)
+  Time current_expired;                   ///< When the current timer actually expired and the callback was added to the queue
 
   struct
   {
@@ -150,9 +152,11 @@ struct WallTimerEvent
 {
   WallTime last_expected;                 ///< In a perfect world, this is when the last callback should have happened
   WallTime last_real;                     ///< When the last callback actually happened
+  WallTime last_expired;                  ///< When the last timer actually expired and the callback was added to the queue
 
   WallTime current_expected;              ///< In a perfect world, this is when the current callback should be happening
   WallTime current_real;                  ///< This is when the current callback was actually called (Time::now() as of the beginning of the callback)
+  WallTime current_expired;               ///< When the current timer actually expired and the callback was added to the queue
 
   struct
   {
@@ -160,6 +164,26 @@ struct WallTimerEvent
   } profile;
 };
 typedef boost::function<void(const WallTimerEvent&)> WallTimerCallback;
+
+/**
+ * \brief Structure passed as a parameter to the callback invoked by a ros::SteadyTimer
+ */
+struct SteadyTimerEvent
+{
+  SteadyTime last_expected;            ///< In a perfect world, this is when the last callback should have happened
+  SteadyTime last_real;                ///< When the last callback actually happened
+  SteadyTime last_expired;             ///< When the last timer actually expired and the callback was added to the queue
+
+  SteadyTime current_expected;         ///< In a perfect world, this is when the current callback should be happening
+  SteadyTime current_real;             ///< This is when the current callback was actually called (SteadyTime::now() as of the beginning of the callback)
+  SteadyTime current_expired;          ///< When the current timer actually expired and the callback was added to the queue
+
+  struct
+  {
+    WallDuration last_duration;           ///< How long the last callback ran for
+  } profile;
+};
+typedef boost::function<void(const SteadyTimerEvent&)> SteadyTimerCallback;
 
 class ServiceManager;
 typedef boost::shared_ptr<ServiceManager> ServiceManagerPtr;

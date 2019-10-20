@@ -54,9 +54,8 @@ Author: Kentaro Wada <www.kentaro.wada@gmail.com>
 """
 
 import sys
+import time
 import unittest
-
-from nose.tools import assert_true
 
 import rospy
 import rostopic
@@ -71,10 +70,8 @@ class PublishChecker(object):
         self.topic_name = topic_name
         self.negative = negative
         self.deadline = rospy.Time.now() + rospy.Duration(timeout)
-        msg_class, _, _ = rostopic.get_topic_class(
-            rospy.resolve_name(topic_name), blocking=True)
         self.msg = None
-        self.sub = rospy.Subscriber(topic_name, msg_class, self._callback)
+        self.sub = rospy.Subscriber(topic_name, rospy.AnyMsg, self._callback)
 
     def _callback(self, msg):
         self.msg = msg
@@ -107,10 +104,15 @@ class PublishTest(unittest.TestCase):
     def test_publish(self):
         """Test topics are published and messages come"""
         use_sim_time = rospy.get_param('/use_sim_time', False)
-        while use_sim_time and (rospy.Time.now() == rospy.Time(0)):
-            rospy.logwarn('/use_sim_time is specified and rostime is 0, '
-                          '/clock is published?')
-            rospy.sleep(0.1)
+        t_start = time.time()
+        while not rospy.is_shutdown() and \
+                use_sim_time and (rospy.Time.now() == rospy.Time(0)):
+            rospy.logwarn_throttle(
+                1, '/use_sim_time is specified and rostime is 0, /clock is published?')
+            if time.time() - t_start > 10:
+                self.fail('Timed out (10s) of /clock publication.')
+            # must use time.sleep because /clock isn't yet published, so rospy.sleep hangs.
+            time.sleep(0.1)
         # subscribe topics
         checkers = []
         for topic in self.topics:
@@ -135,12 +137,9 @@ class PublishTest(unittest.TestCase):
                     continue  # skip if there is no test result
                 finished_topics.append(checker.topic_name)
                 if checker.negative:
-                    assert_true(
-                        ret, 'Topic [%s] is published' % (checker.topic_name))
+                    assert ret, 'Topic [%s] is published' % (checker.topic_name)
                 else:
-                    assert_true(
-                        ret,
-                        'Topic [%s] is not published' % (checker.topic_name))
+                    assert ret, 'Topic [%s] is not published' % (checker.topic_name)
             rospy.sleep(0.01)
 
 

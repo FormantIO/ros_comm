@@ -89,6 +89,10 @@ bool TransportPublisherLink::initialize(const ConnectionPtr& connection)
     connection_->setHeaderReceivedCallback(boost::bind(&TransportPublisherLink::onHeaderReceived, this, _1, _2));
 
     SubscriptionPtr parent = parent_.lock();
+    if (!parent)
+    {
+      return false;
+    }
 
     M_string header;
     header["topic"] = parent->getName();
@@ -198,14 +202,14 @@ void TransportPublisherLink::onMessage(const ConnectionPtr& conn, const boost::s
   }
 }
 
-void TransportPublisherLink::onRetryTimer(const ros::WallTimerEvent&)
+void TransportPublisherLink::onRetryTimer(const ros::SteadyTimerEvent&)
 {
   if (dropping_)
   {
     return;
   }
 
-  if (needs_retry_ && WallTime::now() > next_retry_)
+  if (needs_retry_ && SteadyTime::now() > next_retry_)
   {
     retry_period_ = std::min(retry_period_ * 2, WallDuration(20));
     needs_retry_ = false;
@@ -223,20 +227,21 @@ void TransportPublisherLink::onRetryTimer(const ros::WallTimerEvent&)
       const std::string& host = old_transport->getConnectedHost();
       int port = old_transport->getConnectedPort();
 
-      ROSCPP_LOG_DEBUG("Retrying connection to [%s:%d] for topic [%s]", host.c_str(), port, topic.c_str());
+      ROSCPP_CONN_LOG_DEBUG("Retrying connection to [%s:%d] for topic [%s]", host.c_str(), port, topic.c_str());
 
       TransportTCPPtr transport(boost::make_shared<TransportTCP>(&PollManager::instance()->getPollSet()));
       if (transport->connect(host, port))
       {
         ConnectionPtr connection(boost::make_shared<Connection>());
         connection->initialize(transport, false, HeaderReceivedFunc());
-        initialize(connection);
-
-        ConnectionManager::instance()->addConnection(connection);
+        if (initialize(connection))
+        {
+          ConnectionManager::instance()->addConnection(connection);
+        }
       }
       else
       {
-        ROSCPP_LOG_DEBUG("connect() failed when retrying connection to [%s:%d] for topic [%s]", host.c_str(), port, topic.c_str());
+        ROSCPP_CONN_LOG_DEBUG("connect() failed when retrying connection to [%s:%d] for topic [%s]", host.c_str(), port, topic.c_str());
       }
     }
     else if (parent)
@@ -264,16 +269,16 @@ void TransportPublisherLink::onConnectionDropped(const ConnectionPtr& conn, Conn
   {
     std::string topic = parent ? parent->getName() : "unknown";
 
-    ROSCPP_LOG_DEBUG("Connection to publisher [%s] to topic [%s] dropped", connection_->getTransport()->getTransportInfo().c_str(), topic.c_str());
+    ROSCPP_CONN_LOG_DEBUG("Connection to publisher [%s] to topic [%s] dropped", connection_->getTransport()->getTransportInfo().c_str(), topic.c_str());
 
     ROS_ASSERT(!needs_retry_);
     needs_retry_ = true;
-    next_retry_ = WallTime::now() + retry_period_;
+    next_retry_ = SteadyTime::now() + retry_period_;
 
     if (retry_timer_handle_ == -1)
     {
       retry_period_ = WallDuration(0.1);
-      next_retry_ = WallTime::now() + retry_period_;
+      next_retry_ = SteadyTime::now() + retry_period_;
       // shared_from_this() shared_ptr is used to ensure TransportPublisherLink is not
       // destroyed in the middle of onRetryTimer execution
       retry_timer_handle_ = getInternalTimerManager()->add(WallDuration(retry_period_),

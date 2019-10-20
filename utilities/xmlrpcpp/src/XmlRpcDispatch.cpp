@@ -3,19 +3,17 @@
 #include "xmlrpcpp/XmlRpcSource.h"
 #include "xmlrpcpp/XmlRpcUtil.h"
 
+#include "ros/time.h"
+
 #include <math.h>
 #include <errno.h>
 #include <sys/timeb.h>
-#include <sys/poll.h>
-#if defined (__ANDROID__)
-#include <sys/select.h>
-#endif
 
 #if defined(_WINDOWS)
 # include <winsock2.h>
 static inline int poll( struct pollfd *pfd, int nfds, int timeout)
 {
-    return WSAPoll ( pfd, nfds, timeout );
+  return WSAPoll(pfd, nfds, timeout);
 }
 
 # define USE_FTIME
@@ -24,6 +22,7 @@ static inline int poll( struct pollfd *pfd, int nfds, int timeout)
 #  define ftime _ftime_s
 # endif
 #else
+# include <sys/poll.h>
 # include <sys/time.h>
 #endif  // _WINDOWS
 
@@ -82,6 +81,20 @@ XmlRpcDispatch::setSourceEvents(XmlRpcSource* source, unsigned eventMask)
 void
 XmlRpcDispatch::work(double timeout)
 {
+  // Loosely based on `man select` > Correspondence between select() and poll() notifications
+  // and cloudius-systems/osv#35, cloudius-systems/osv@b53d39a using poll to emulate select
+  const unsigned POLLIN_REQ = POLLIN; // Request read
+  const unsigned POLLIN_CHK = (POLLIN | POLLHUP | POLLERR); // Readable or connection lost
+  const unsigned POLLOUT_REQ = POLLOUT; // Request write
+  const unsigned POLLOUT_CHK = (POLLOUT | POLLERR); // Writable or connection lost
+#if !defined(_WINDOWS)
+  const unsigned POLLEX_REQ = POLLPRI; // Out-of-band data received
+  const unsigned POLLEX_CHK = (POLLPRI | POLLNVAL); // Out-of-band data or invalid fd
+#else
+  const unsigned POLLEX_REQ = POLLRDBAND; // Out-of-band data received
+  const unsigned POLLEX_CHK = (POLLRDBAND | POLLNVAL); // Out-of-band data or invalid fd
+#endif
+
   // Compute end time
   _endTime = (timeout < 0.0) ? -1.0 : (getTime() + timeout);
   _doClear = false;
@@ -92,47 +105,59 @@ XmlRpcDispatch::work(double timeout)
   while (_sources.size() > 0) {
 
     // Construct the sets of descriptors we are interested in
-    struct pollfd fds[_sources.size()];
+    const unsigned source_cnt = _sources.size();
+    std::vector<pollfd> fds(source_cnt);
+    std::vector<XmlRpcSource *> sources(source_cnt);
 
     SourceList::iterator it;
     std::size_t i = 0;
     for (it=_sources.begin(); it!=_sources.end(); ++it, ++i) {
-      int fd = it->getSource()->getfd();
-      fds[i].fd = fd;
+      sources[i] = it->getSource();
+      fds[i].fd = sources[i]->getfd();
+      fds[i].revents = 0; // some platforms may not clear this in poll()
       fds[i].events = 0;
-      if (it->getMask() & ReadableEvent) fds[i].events |= POLLIN;
-      if (it->getMask() & WritableEvent) fds[i].events |= POLLOUT;
+      if (it->getMask() & ReadableEvent) fds[i].events |= POLLIN_REQ;
+      if (it->getMask() & WritableEvent) fds[i].events |= POLLOUT_REQ;
+      if (it->getMask() & Exception) fds[i].events |= POLLEX_REQ;
     }
 
     // Check for events
-    int nEvents = poll(fds, _sources.size(), (timeout_ms < 0) ? -1 : timeout_ms);
+    int nEvents = poll(&fds[0], source_cnt, (timeout_ms < 0) ? -1 : timeout_ms);
 
     if (nEvents < 0)
     {
+#if defined(_WINDOWS)
+      XmlRpcUtil::error("Error in XmlRpcDispatch::work: error in poll (%d).", WSAGetLastError());
+#else
       if(errno != EINTR)
         XmlRpcUtil::error("Error in XmlRpcDispatch::work: error in poll (%d).", nEvents);
+#endif
       _inWork = false;
       return;
     }
 
     // Process events
-    for (i=0, it=_sources.begin(); it != _sources.end(); ++i)
+    for (i=0; i < source_cnt; ++i)
     {
-      SourceList::iterator thisIt = it++;
-      XmlRpcSource* src = thisIt->getSource();
+      XmlRpcSource* src = sources[i];
+      pollfd & pfd = fds[i];
       unsigned newMask = (unsigned) -1;
-      // If you select on multiple event types this could be ambiguous
-      if (fds[i].revents & POLLIN)
+      // Only handle requested events to avoid being prematurely removed from dispatch
+      bool readable = (pfd.events & POLLIN_REQ) == POLLIN_REQ;
+      bool writable = (pfd.events & POLLOUT_REQ) == POLLOUT_REQ;
+      bool oob = (pfd.events & POLLEX_REQ) == POLLEX_REQ;
+      if (readable && (pfd.revents & POLLIN_CHK))
         newMask &= src->handleEvent(ReadableEvent);
-      if (fds[i].revents & POLLOUT)
+      if (writable && (pfd.revents & POLLOUT_CHK))
         newMask &= src->handleEvent(WritableEvent);
-      if (fds[i].revents & (POLLERR|POLLHUP|POLLNVAL))
+      if (oob && (pfd.revents & POLLEX_CHK))
         newMask &= src->handleEvent(Exception);
 
-      // Find the source again.  It may have moved as a result of the way
+      // Find the source iterator. It may have moved as a result of the way
       // that sources are removed and added in the call stack starting
       // from the handleEvent() calls above.
-      for (thisIt=_sources.begin(); thisIt != _sources.end(); thisIt++)
+      SourceList::iterator thisIt;
+      for (thisIt = _sources.begin(); thisIt != _sources.end(); thisIt++)
       {
         if(thisIt->getSource() == src)
           break;
@@ -147,8 +172,9 @@ XmlRpcDispatch::work(double timeout)
         _sources.erase(thisIt);  // Stop monitoring this one
         if ( ! src->getKeepOpen())
           src->close();
-      } else if (newMask != (unsigned) -1)
+      } else if (newMask != (unsigned) -1) {
         thisIt->getMask() = newMask;
+      }
     }
 
     // Check whether to clear all sources
@@ -207,11 +233,10 @@ XmlRpcDispatch::getTime()
   return ((double) tbuff.time + ((double)tbuff.millitm / 1000.0) +
 	  ((double) tbuff.timezone * 60));
 #else
-  struct timeval	tv;
-  struct timezone	tz;
+  uint32_t sec, nsec;
 
-  gettimeofday(&tv, &tz);
-  return (tv.tv_sec + tv.tv_usec / 1000000.0);
+  ros::ros_steadytime(sec, nsec);
+  return ((double)sec + (double)nsec / 1e9);
 #endif /* USE_FTIME */
 }
 

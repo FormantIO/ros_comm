@@ -28,6 +28,21 @@
 #ifndef ROSCPP_TIMER_MANAGER_H
 #define ROSCPP_TIMER_MANAGER_H
 
+// check if we might need to include our own backported version boost::condition_variable
+// in order to use CLOCK_MONOTONIC for the SteadyTimer
+// the include order here is important!
+#ifdef BOOST_THREAD_HAS_CONDATTR_SET_CLOCK_MONOTONIC
+#include <boost/version.hpp>
+#if BOOST_VERSION < 106100
+// use backported version of boost condition variable, see https://svn.boost.org/trac/boost/ticket/6377
+#include "boost_161_condition_variable.h"
+#else // Boost version is 1.61 or greater and has the steady clock fixes
+#include <boost/thread/condition_variable.hpp>
+#endif
+#else // !BOOST_THREAD_HAS_CONDATTR_SET_CLOCK_MONOTONIC
+#include <boost/thread/condition_variable.hpp>
+#endif // BOOST_THREAD_HAS_CONDATTR_SET_CLOCK_MONOTONIC
+
 #include "ros/forwards.h"
 #include "ros/time.h"
 #include "ros/file_log.h"
@@ -35,7 +50,6 @@
 #include <boost/thread/thread.hpp>
 #include <boost/thread/mutex.hpp>
 #include <boost/thread/recursive_mutex.hpp>
-#include <boost/thread/condition_variable.hpp>
 
 #include "ros/assert.h"
 #include "ros/callback_queue_interface.h"
@@ -64,6 +78,7 @@ private:
     T next_expected;
 
     T last_real;
+    T last_expired;
 
     bool removed;
 
@@ -129,12 +144,14 @@ private:
   class TimerQueueCallback : public CallbackInterface
   {
   public:
-    TimerQueueCallback(TimerManager<T, D, E>* parent, const TimerInfoPtr& info, T last_expected, T last_real, T current_expected)
+    TimerQueueCallback(TimerManager<T, D, E>* parent, const TimerInfoPtr& info, T last_expected, T last_real, T current_expected, T last_expired, T current_expired)
     : parent_(parent)
     , info_(info)
     , last_expected_(last_expected)
     , last_real_(last_real)
     , current_expected_(current_expected)
+    , last_expired_(last_expired)
+    , current_expired_(current_expired)
     , called_(false)
     {
       boost::mutex::scoped_lock lock(info->waiting_mutex);
@@ -176,16 +193,19 @@ private:
         E event;
         event.last_expected = last_expected_;
         event.last_real = last_real_;
+        event.last_expired = last_expired_;
         event.current_expected = current_expected_;
         event.current_real = T::now();
+        event.current_expired = current_expired_;
         event.profile.last_duration = info->last_cb_duration;
 
-        WallTime cb_start = WallTime::now();
+        SteadyTime cb_start = SteadyTime::now();
         info->callback(event);
-        WallTime cb_end = WallTime::now();
+        SteadyTime cb_end = SteadyTime::now();
         info->last_cb_duration = cb_end - cb_start;
 
         info->last_real = event.current_real;
+        info->last_expired = event.current_expired;
 
         parent_->schedule(info);
       }
@@ -199,6 +219,8 @@ private:
     T last_expected_;
     T last_real_;
     T current_expected_;
+    T last_expired_;
+    T current_expired_;
 
     bool called_;
   };
@@ -515,7 +537,7 @@ void TimerManager<T, D, E>::threadFunc()
           current = T::now();
 
           //ROS_DEBUG("Scheduling timer callback for timer [%d] of period [%f], [%f] off expected", info->handle, info->period.toSec(), (current - info->next_expected).toSec());
-          CallbackInterfacePtr cb(boost::make_shared<TimerQueueCallback>(this, info, info->last_expected, info->last_real, info->next_expected));
+          CallbackInterfacePtr cb(boost::make_shared<TimerQueueCallback>(this, info, info->last_expected, info->last_real, info->next_expected, info->last_expired, current));
           info->callback_queue->addCallback(cb, (uint64_t)info.get());
 
           waiting_.pop_front();
@@ -562,7 +584,7 @@ void TimerManager<T, D, E>::threadFunc()
       {
         // On system time we can simply sleep for the rest of the wait time, since anything else requiring processing will
         // signal the condition variable
-        int32_t remaining_time = std::max((int32_t)((sleep_end - current).toSec() * 1000.0f), 1);
+        int64_t remaining_time = std::max<int64_t>((sleep_end - current).toSec() * 1000.0f, 1);
         timers_cond_.timed_wait(lock, boost::posix_time::milliseconds(remaining_time));
       }
     }

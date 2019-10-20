@@ -40,20 +40,10 @@
 namespace ros
 {
 
-ConnectionManagerPtr g_connection_manager;
-boost::mutex g_connection_manager_mutex;
 const ConnectionManagerPtr& ConnectionManager::instance()
 {
-  if (!g_connection_manager)
-  {
-    boost::mutex::scoped_lock lock(g_connection_manager_mutex);
-    if (!g_connection_manager)
-    {
-      g_connection_manager = boost::make_shared<ConnectionManager>();
-    }
-  }
-
-  return g_connection_manager;
+  static ConnectionManagerPtr connection_manager = boost::make_shared<ConnectionManager>();
+  return connection_manager;
 }
 
 ConnectionManager::ConnectionManager()
@@ -209,7 +199,7 @@ bool ConnectionManager::onConnectionHeaderReceived(const ConnectionPtr& conn, co
   std::string val;
   if (header.getValue("topic", val))
   {
-    ROSCPP_LOG_DEBUG("Connection: Creating TransportSubscriberLink for topic [%s] connected to [%s]", 
+    ROSCPP_CONN_LOG_DEBUG("Connection: Creating TransportSubscriberLink for topic [%s] connected to [%s]", 
 		     val.c_str(), conn->getRemoteString().c_str());
 
     TransportSubscriberLinkPtr sub_link(boost::make_shared<TransportSubscriberLink>());

@@ -40,6 +40,7 @@
 #include "rosbag/buffer.h"
 #include "rosbag/chunked_file.h"
 #include "rosbag/constants.h"
+#include "rosbag/encryptor.h"
 #include "rosbag/exceptions.h"
 #include "rosbag/structures.h"
 
@@ -57,10 +58,25 @@
 #include <set>
 #include <stdexcept>
 
+#include <boost/config.hpp>
 #include <boost/format.hpp>
 #include <boost/iterator/iterator_facade.hpp>
 
+#include <pluginlib/class_loader.hpp>
+
 #include "console_bridge/console.h"
+#if defined logDebug
+# undef logDebug
+#endif
+#if defined logInform
+# undef logInform
+#endif
+#if defined logWarn
+# undef logWarn
+#endif
+#if defined logError
+# undef logError
+#endif
 
 namespace rosbag {
 
@@ -80,7 +96,7 @@ class MessageInstance;
 class View;
 class Query;
 
-class ROSBAG_DECL Bag
+class ROSBAG_STORAGE_DECL Bag
 {
     friend class MessageInstance;
     friend class View;
@@ -98,6 +114,12 @@ public:
     explicit Bag(std::string const& filename, uint32_t mode = bagmode::Read);
 
     ~Bag();
+
+#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
+    Bag(Bag&& other);
+
+    Bag& operator=(Bag&& other);
+#endif // BOOST_NO_CXX11_RVALUE_REFERENCES
 
     //! Open a bag file.
     /*!
@@ -121,6 +143,16 @@ public:
     CompressionType getCompression() const;                       //!< Get the compression method to use for writing chunks
     void            setChunkThreshold(uint32_t chunk_threshold);  //!< Set the threshold for creating new chunks
     uint32_t        getChunkThreshold() const;                    //!< Get the threshold for creating new chunks
+
+    //! Set encryptor of the bag file
+    /*!
+     * \param plugin_name The name of the encryptor plugin
+     * \param plugin_param The string parameter to be passed to the plugin initialization method
+     *
+     * Call this method to specify an encryptor for writing bag contents. This method need not be called when
+     * reading or appending a bag file: The encryptor is read from the bag file header.
+     */
+    void setEncryptorPlugin(const std::string& plugin_name, const std::string& plugin_param = std::string());
 
     //! Write a message into the bag file
     /*!
@@ -171,7 +203,17 @@ public:
     void write(std::string const& topic, ros::Time const& time, boost::shared_ptr<T> const& msg,
                boost::shared_ptr<ros::M_string> connection_header = boost::shared_ptr<ros::M_string>());
 
+    void swap(Bag&);
+
+    bool isOpen() const;
+
 private:
+    // disable copying
+    Bag(const Bag&);
+    Bag& operator=(const Bag&);
+
+    void init();
+
     // This helper function actually does the write with an arbitrary serializable message
     template<class T>
     void doWrite(std::string const& topic, ros::Time const& time, T const& msg, boost::shared_ptr<ros::M_string> const& connection_header);
@@ -195,7 +237,7 @@ private:
     
     void writeVersion();
     void writeFileHeaderRecord();
-    void writeConnectionRecord(ConnectionInfo const* connection_info);
+    void writeConnectionRecord(ConnectionInfo const* connection_info, const bool encrypt);
     void appendConnectionRecordToBuffer(Buffer& buf, ConnectionInfo const* connection_info);
     template<class T>
     void writeMessageDataRecord(uint32_t conn_id, ros::Time const& time, T const& msg);
@@ -308,6 +350,11 @@ private:
     mutable Buffer*  current_buffer_;
 
     mutable uint64_t decompressed_chunk_;      //!< position of decompressed chunk
+
+    // Encryptor plugin loader
+    pluginlib::ClassLoader<rosbag::EncryptorBase> encryptor_loader_;
+    // Active encryptor
+    boost::shared_ptr<rosbag::EncryptorBase> encryptor_;
 };
 
 } // namespace rosbag
@@ -540,8 +587,8 @@ void Bag::doWrite(std::string const& topic, ros::Time const& time, T const& msg,
                 (*connection_info->header)["message_definition"] = connection_info->msg_def;
             }
             connections_[conn_id] = connection_info;
-
-            writeConnectionRecord(connection_info);
+            // No need to encrypt connection records in chunks
+            writeConnectionRecord(connection_info, false);
             appendConnectionRecordToBuffer(outgoing_chunk_buffer_, connection_info);
         }
 
@@ -553,8 +600,11 @@ void Bag::doWrite(std::string const& topic, ros::Time const& time, T const& msg,
 
         std::multiset<IndexEntry>& chunk_connection_index = curr_chunk_connection_indexes_[connection_info->id];
         chunk_connection_index.insert(chunk_connection_index.end(), index_entry);
-        std::multiset<IndexEntry>& connection_index = connection_indexes_[connection_info->id];
-        connection_index.insert(connection_index.end(), index_entry);
+
+        if (mode_ != BagMode::Write) {
+          std::multiset<IndexEntry>& connection_index = connection_indexes_[connection_info->id];
+          connection_index.insert(connection_index.end(), index_entry);
+        }
 
         // Increment the connection count
         curr_chunk_info_.connection_counts[connection_info->id]++;
@@ -564,7 +614,7 @@ void Bag::doWrite(std::string const& topic, ros::Time const& time, T const& msg,
 
         // Check if we want to stop this chunk
         uint32_t chunk_size = getChunkOffset();
-        logDebug("  curr_chunk_size=%d (threshold=%d)", chunk_size, chunk_threshold_);
+        CONSOLE_BRIDGE_logDebug("  curr_chunk_size=%d (threshold=%d)", chunk_size, chunk_threshold_);
         if (chunk_size > chunk_threshold_) {
             // Empty the outgoing chunk
             stopWritingChunk();
@@ -599,7 +649,7 @@ void Bag::writeMessageDataRecord(uint32_t conn_id, ros::Time const& time, T cons
     seek(0, std::ios::end);
     file_size_ = file_.getOffset();
 
-    logDebug("Writing MSG_DATA [%llu:%d]: conn=%d sec=%d nsec=%d data_len=%d",
+    CONSOLE_BRIDGE_logDebug("Writing MSG_DATA [%llu:%d]: conn=%d sec=%d nsec=%d data_len=%d",
               (unsigned long long) file_.getOffset(), getChunkOffset(), conn_id, time.sec, time.nsec, msg_ser_len);
 
     writeHeader(header);
@@ -619,6 +669,10 @@ void Bag::writeMessageDataRecord(uint32_t conn_id, ros::Time const& time, T cons
     	curr_chunk_info_.end_time = time;
     else if (time < curr_chunk_info_.start_time)
         curr_chunk_info_.start_time = time;
+}
+
+inline void swap(Bag& a, Bag& b) {
+    a.swap(b);
 }
 
 } // namespace rosbag

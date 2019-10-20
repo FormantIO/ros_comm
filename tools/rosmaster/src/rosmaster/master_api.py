@@ -202,10 +202,20 @@ def publisher_update_task(api, topic, pub_uris):
     @param pub_uris: list of publisher APIs to send to node
     @type  pub_uris: [str]
     """
-    
-    mloginfo("publisherUpdate[%s] -> %s", topic, api)
-    #TODO: check return value for errors so we can unsubscribe if stale
-    xmlrpcapi(api).publisherUpdate('/master', topic, pub_uris)
+    msg = "publisherUpdate[%s] -> %s %s" % (topic, api, pub_uris)
+    mloginfo(msg)
+    start_sec = time.time()
+    try:
+        #TODO: check return value for errors so we can unsubscribe if stale
+        ret = xmlrpcapi(api).publisherUpdate('/master', topic, pub_uris)
+        msg_suffix = "result=%s" % ret
+    except Exception as ex:
+        msg_suffix = "exception=%s" % ex
+        raise
+    finally:
+        delta_sec = time.time() - start_sec
+        mloginfo("%s: sec=%0.2f, %s", msg, delta_sec, msg_suffix)
+
 
 def service_update_task(api, service, uri):
     """
@@ -365,7 +375,7 @@ class ROSMasterHandler(object):
         @rtype: [int, str, int]
         """
         key = resolve_name(key, caller_id)
-        self.param_server.set_param(key, value, self._notify_param_subscribers)
+        self.param_server.set_param(key, value, self._notify_param_subscribers, caller_id)
         mloginfo("+PARAM [%s] by %s",key, caller_id)
         return 1, "parameter %s set"%key, 0
 
@@ -613,7 +623,7 @@ class ROSMasterHandler(object):
             self.ps_lock.release()
         return 1, "Registered [%s] as provider of [%s]"%(caller_id, service), 1
 
-    @apivalidate(0, (is_service('service'),))
+    @apivalidate('', (is_service('service'),))
     def lookupService(self, caller_id, service):
         """
         Lookup all provider of a particular service.
@@ -662,7 +672,7 @@ class ROSMasterHandler(object):
     ##################################################################################
     # PUBLISH/SUBSCRIBE
 
-    @apivalidate(0, ( is_topic('topic'), valid_type_name('topic_type'), is_api('caller_api')))
+    @apivalidate([], ( is_topic('topic'), valid_type_name('topic_type'), is_api('caller_api')))
     def registerSubscriber(self, caller_id, topic, topic_type, caller_api):
         """
         Subscribe the caller to the specified topic. In addition to receiving
@@ -698,7 +708,7 @@ class ROSMasterHandler(object):
     @apivalidate(0, (is_topic('topic'), is_api('caller_api')))
     def unregisterSubscriber(self, caller_id, topic, caller_api):
         """
-        Unregister the caller as a publisher of the topic.
+        Unregister the caller as a subscriber of the topic.
         @param caller_id: ROS caller id
         @type  caller_id: str
         @param topic: Fully-qualified name of topic to unregister.
@@ -719,7 +729,7 @@ class ROSMasterHandler(object):
         finally:
             self.ps_lock.release()
 
-    @apivalidate(0, ( is_topic('topic'), valid_type_name('topic_type'), is_api('caller_api')))
+    @apivalidate([], ( is_topic('topic'), valid_type_name('topic_type'), is_api('caller_api')))
     def registerPublisher(self, caller_id, topic, topic_type, caller_api):
         """
         Register the caller as a publisher the topic.

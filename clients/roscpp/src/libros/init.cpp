@@ -316,24 +316,6 @@ void start()
     }
   }
 
-  char* env_ipv6 = NULL;
-#ifdef _MSC_VER
-  _dupenv_s(&env_ipv6, NULL, "ROS_IPV6");
-#else
-  env_ipv6 = getenv("ROS_IPV6");
-#endif
-
-  bool use_ipv6 = (env_ipv6 && strcmp(env_ipv6,"on") == 0);
-  TransportTCP::s_use_ipv6_ = use_ipv6;
-  XmlRpc::XmlRpcSocket::s_use_ipv6_ = use_ipv6;
-
-#ifdef _MSC_VER
-  if (env_ipv6)
-  {
-    free(env_ipv6);
-  }
-#endif
-
   param::param("/tcp_keepalive", TransportTCP::s_use_keepalive_, TransportTCP::s_use_keepalive_);
 
   PollManager::instance()->addPollThreadListener(checkForShutdown);
@@ -430,6 +412,26 @@ end:
   }
 }
 
+void check_ipv6_environment() {
+  char* env_ipv6 = NULL;
+#ifdef _MSC_VER
+  _dupenv_s(&env_ipv6, NULL, "ROS_IPV6");
+#else
+  env_ipv6 = getenv("ROS_IPV6");
+#endif
+
+  bool use_ipv6 = (env_ipv6 && strcmp(env_ipv6,"on") == 0);
+  TransportTCP::s_use_ipv6_ = use_ipv6;
+  XmlRpc::XmlRpcSocket::s_use_ipv6_ = use_ipv6;
+
+#ifdef _MSC_VER
+  if (env_ipv6)
+  {
+    free(env_ipv6);
+  }
+#endif
+}
+
 void init(const M_string& remappings, const std::string& name, uint32_t options)
 {
   if (!g_atexit_registered)
@@ -452,7 +454,11 @@ void init(const M_string& remappings, const std::string& name, uint32_t options)
     // Disable SIGPIPE
 #ifndef WIN32
     signal(SIGPIPE, SIG_IGN);
+#else
+    WSADATA wsaData;
+    WSAStartup(MAKEWORD(2, 0), &wsaData);
 #endif
+    check_ipv6_environment();
     network::init(remappings);
     master::init(remappings);
     // names:: namespace is initialized by this_node
@@ -589,7 +595,8 @@ void shutdown()
   {
     g_internal_queue_thread.join();
   }
-
+  //ros::console::deregister_appender(g_rosout_appender);
+  delete g_rosout_appender;
   g_rosout_appender = 0;
 
   if (g_started)
@@ -600,8 +607,6 @@ void shutdown()
     ConnectionManager::instance()->shutdown();
     XMLRPCManager::instance()->shutdown();
   }
-
-  WallTime end = WallTime::now();
 
   g_started = false;
   g_ok = false;

@@ -5,15 +5,15 @@ if(NOT WIN32)
   set_directory_properties(PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra")
 endif()
 
-find_package(catkin REQUIRED COMPONENTS roscpp xmlrpcpp rosconsole)
+find_package(catkin REQUIRED COMPONENTS roscpp rosconsole)
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES message_filters
-  CATKIN_DEPENDS roscpp xmlrpcpp rosconsole
+  CATKIN_DEPENDS roscpp rosconsole
 )
 catkin_python_setup()
 
-find_package(Boost REQUIRED COMPONENTS signals thread)
+find_package(Boost REQUIRED COMPONENTS thread)
 
 include_directories(include ${catkin_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS})
 link_directories(${catkin_LIBRARY_DIRS})

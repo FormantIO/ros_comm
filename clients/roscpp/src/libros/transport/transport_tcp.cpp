@@ -138,6 +138,10 @@ bool TransportTCP::initializeSocket()
   {
     ROS_DEBUG("Adding tcp socket [%d] to pollset", sock_);
     poll_set_->addSocket(sock_, boost::bind(&TransportTCP::socketUpdate, this, _1), shared_from_this());
+#if defined(POLLRDHUP) // POLLRDHUP is not part of POSIX!
+    // This is needed to detect dead connections. #1704
+    poll_set_->addEvents(sock_, POLLRDHUP);
+#endif
   }
 
   if (!(flags_ & SYNCHRONOUS))
@@ -179,24 +183,34 @@ void TransportTCP::setKeepAlive(bool use, uint32_t idle, uint32_t interval, uint
     }
 
 /* cygwin SOL_TCP does not seem to support TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT */
-#if defined(SOL_TCP) && !defined(__CYGWIN__)
+#if defined(SOL_TCP) && defined(TCP_KEEPIDLE)
     val = idle;
     if (setsockopt(sock_, SOL_TCP, TCP_KEEPIDLE, &val, sizeof(val)) != 0)
     {
       ROS_DEBUG("setsockopt failed to set TCP_KEEPIDLE on socket [%d] [%s]", sock_, cached_remote_host_.c_str());
     }
+#else
+    (void)idle;
+#endif
 
+#if defined(SOL_TCP) && defined(TCP_KEEPINTVL)
     val = interval;
     if (setsockopt(sock_, SOL_TCP, TCP_KEEPINTVL, &val, sizeof(val)) != 0)
     {
       ROS_DEBUG("setsockopt failed to set TCP_KEEPINTVL on socket [%d] [%s]", sock_, cached_remote_host_.c_str());
     }
+#else
+    (void)interval;
+#endif
 
+#if defined(SOL_TCP) && defined(TCP_KEEPCNT)
     val = count;
     if (setsockopt(sock_, SOL_TCP, TCP_KEEPCNT, &val, sizeof(val)) != 0)
     {
       ROS_DEBUG("setsockopt failed to set TCP_KEEPCNT on socket [%d] [%s]", sock_, cached_remote_host_.c_str());
     }
+#else
+    (void)count;
 #endif
   }
   else
@@ -266,7 +280,7 @@ bool TransportTCP::connect(const std::string& host, int port)
 
     bool found = false;
     struct addrinfo* it = addr;
-    char namebuf[128];
+    char namebuf[128] = {};
     for (; it; it = it->ai_next)
     {
       if (!s_use_ipv6_ && it->ai_family == AF_INET)
@@ -278,7 +292,7 @@ bool TransportTCP::connect(const std::string& host, int port)
         address->sin_family = it->ai_family;
         address->sin_port = htons(port);
 	
-        strcpy(namebuf, inet_ntoa(address->sin_addr));
+        strncpy(namebuf, inet_ntoa(address->sin_addr), sizeof(namebuf)-1);
         found = true;
         break;
       }
@@ -311,11 +325,12 @@ bool TransportTCP::connect(const std::string& host, int port)
 
   int ret = ::connect(sock_, (sockaddr*) &sas, sas_len);
   // windows might need some time to sleep (input from service robotics hack) add this if testing proves it is necessary.
-  ROS_ASSERT((flags_ & SYNCHRONOUS) || ret != 0);
+  // ROS_ASSERT((flags_ & SYNCHRONOUS) || ret != 0);
   if (((flags_ & SYNCHRONOUS) && ret != 0) || // synchronous, connect() should return 0
-      (!(flags_ & SYNCHRONOUS) && last_socket_error() != ROS_SOCKETS_ASYNCHRONOUS_CONNECT_RETURN)) // asynchronous, connect() should return -1 and WSAGetLastError()=WSAEWOULDBLOCK/errno=EINPROGRESS
+      (!(flags_ & SYNCHRONOUS) && ret != 0 && last_socket_error() != ROS_SOCKETS_ASYNCHRONOUS_CONNECT_RETURN)) 
+      // asynchronous, connect() may return 0 or -1. When return -1, WSAGetLastError()=WSAEWOULDBLOCK/errno=EINPROGRESS
   {
-    ROSCPP_LOG_DEBUG("Connect to tcpros publisher [%s:%d] failed with error [%d, %s]", host.c_str(), port, ret, last_socket_error_string());
+    ROSCPP_CONN_LOG_DEBUG("Connect to tcpros publisher [%s:%d] failed with error [%d, %s]", host.c_str(), port, ret, last_socket_error_string());
     close();
 
     return false;
@@ -340,11 +355,11 @@ bool TransportTCP::connect(const std::string& host, int port)
 
   if (flags_ & SYNCHRONOUS)
   {
-    ROSCPP_LOG_DEBUG("connect() succeeded to [%s:%d] on socket [%d]", host.c_str(), port, sock_);
+    ROSCPP_CONN_LOG_DEBUG("connect() succeeded to [%s:%d] on socket [%d]", host.c_str(), port, sock_);
   }
   else
   {
-    ROSCPP_LOG_DEBUG("Async connect() in progress to [%s:%d] on socket [%d]", host.c_str(), port, sock_);
+    ROSCPP_CONN_LOG_DEBUG("Async connect() in progress to [%s:%d] on socket [%d]", host.c_str(), port, sock_);
   }
 
   return true;
@@ -378,7 +393,7 @@ bool TransportTCP::listen(int port, int backlog, const AcceptCallback& accept_cb
     sa_len_ = sizeof(sockaddr_in);
   }
 
-  if (sock_ <= 0)
+  if (sock_ == ROS_INVALID_SOCKET)
   {
     ROS_ERROR("socket() failed with error [%s]", last_socket_error_string());
     return false;
@@ -685,6 +700,9 @@ void TransportTCP::socketUpdate(int events)
 
   if((events & POLLERR) ||
      (events & POLLHUP) ||
+#if defined(POLLRDHUP) // POLLRDHUP is not part of POSIX!
+     (events & POLLRDHUP) ||
+#endif
      (events & POLLNVAL))
   {
     uint32_t error = -1;
@@ -723,14 +741,14 @@ std::string TransportTCP::getClientURI()
   sockaddr_in *sin = (sockaddr_in *)&sas;
   sockaddr_in6 *sin6 = (sockaddr_in6 *)&sas;
 
-  char namebuf[128];
+  char namebuf[128] = {};
   int port;
 
   switch (sas.ss_family)
   {
     case AF_INET:
       port = ntohs(sin->sin_port);
-      strcpy(namebuf, inet_ntoa(sin->sin_addr));
+      strncpy(namebuf, inet_ntoa(sin->sin_addr), sizeof(namebuf)-1);
       break;
     case AF_INET6:
       port = ntohs(sin6->sin6_port);

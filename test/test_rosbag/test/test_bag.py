@@ -209,9 +209,9 @@ class TestRosbag(unittest.TestCase):
             os.system(cmd % (inbag_filename, outbag1_filename))
             os.system(cmd % (outbag1_filename, outbag2_filename))
             
-            with open(outbag1_filename, 'r') as h:
+            with open(outbag1_filename, 'rb') as h:
                 outbag1_md5 = hashlib.md5(h.read()).hexdigest()
-            with open(outbag2_filename, 'r') as h:
+            with open(outbag2_filename, 'rb') as h:
                 outbag2_md5 = hashlib.md5(h.read()).hexdigest()
             self.assertEquals(outbag1_md5, outbag2_md5)
         finally:
@@ -287,7 +287,7 @@ class TestRosbag(unittest.TestCase):
     def test_get_message_count(self):
         fn = '/tmp/test_get_message_count.bag'
         with rosbag.Bag(fn, mode='w') as bag:
-            for i in xrange(100):
+            for i in range(100):
                 bag.write("/test_bag", Int32(data=i))
                 bag.write("/test_bag", String(data='also'))
                 bag.write("/test_bag/more", String(data='alone'))
@@ -303,7 +303,7 @@ class TestRosbag(unittest.TestCase):
         
         # No Compression
         with rosbag.Bag(fn, mode='w') as bag:
-            for i in xrange(100):
+            for i in range(100):
                 bag.write("/test_bag", Int32(data=i))
                 
         with rosbag.Bag(fn) as bag:
@@ -314,7 +314,7 @@ class TestRosbag(unittest.TestCase):
             self.assertEquals(info.compressed, 5166)
         
         with rosbag.Bag(fn, mode='w', compression=rosbag.Compression.BZ2) as bag:
-            for i in xrange(100):
+            for i in range(100):
                 bag.write("/test_bag", Int32(data=i))
                 
         with rosbag.Bag(fn) as bag:
@@ -324,14 +324,14 @@ class TestRosbag(unittest.TestCase):
             
             # the value varies each run, I suspect based on rand, but seems
             # to generally be around 960 to 980 on my comp
-            self.assertLess(info.compressed, 1000)
-            self.assertGreater(info.compressed, 900)
+            self.assertLess(info.compressed, 1050)
+            self.assertGreater(info.compressed, 850)
         
     def test_get_time(self):
         fn = '/tmp/test_get_time.bag'
         
         with rosbag.Bag(fn, mode='w') as bag:
-            for i in xrange(100):
+            for i in range(100):
                 bag.write("/test_bag", Int32(data=i), t=genpy.Time.from_sec(i))
                 
         with rosbag.Bag(fn) as bag:
@@ -358,7 +358,7 @@ class TestRosbag(unittest.TestCase):
         topic_1 = "/test_bag"
         topic_2 = "/test_bag/more"
         with rosbag.Bag(fn, mode='w') as bag:
-            for i in xrange(100):
+            for i in range(100):
                 bag.write(topic_1, Int32(data=i))
                 bag.write(topic_1, String(data='also'))
                 bag.write(topic_2, String(data='alone'))
@@ -431,6 +431,20 @@ class TestRosbag(unittest.TestCase):
                 data = bag._read_record_data(f)
 
                 print(bag._OP_CODES.get(op, op))
+
+    # #1209
+    def test_rosbag_exceptions_are_pickleable(self):
+        #bag_exception = rosbag.ROSBagException("msg string")
+        def test(bag_exception):
+            import pickle
+            pickle_str = pickle.dumps(bag_exception)
+            unpickled = pickle.loads(pickle_str)
+            self.assertTrue(bag_exception.value == unpickled.value)
+        test(bag.ROSBagException("msg string"))
+        test(bag.ROSBagFormatException("msg string 2"))
+        test(bag.ROSBagUnindexedException())
+        test(bag.ROSBagEncryptNotSupportedException("msg string 3"))
+        test(bag.ROSBagEncryptException("msg string 4"))
 
 if __name__ == '__main__':
     import rostest

@@ -64,7 +64,7 @@ class TestRostopicOnline(unittest.TestCase):
     ## test that the rosmsg command works
     def test_cmd_help(self):
         cmd = 'roswtf'
-        output = Popen([cmd, '-h'], stdout=PIPE).communicate()[0]
+        output = Popen([cmd, '-h'], stdout=PIPE).communicate()[0].decode()
         self.assert_('Options' in output)
             
     def test_offline(self):
@@ -80,11 +80,15 @@ class TestRostopicOnline(unittest.TestCase):
         pkgs = ['roswtf',
             'rosgraph', 'roslaunch', 'roslib', 'rosnode', 'rosservice',
             'rosbag', 'rosbag_storage', 'roslz4', 'rosconsole', 'roscpp', 'rosgraph_msgs', 'roslang', 'rosmaster', 'rosmsg', 'rosout', 'rosparam', 'rospy', 'rostest', 'rostopic', 'topic_tools', 'xmlrpcpp',
+            'std_srvs',  # ros_comm_msgs
             'cpp_common', 'roscpp_serialization', 'roscpp_traits', 'rostime',  # roscpp_core
             'rosbuild', 'rosclean', 'rosunit',  # ros
             'rospack', 'std_msgs', 'message_runtime', 'message_generation', 'gencpp', 'genlisp', 'genpy', 'genmsg', 'catkin',
         ]
-        paths = [rospack.get_path(pkg) for pkg in pkgs]
+        try:
+            paths = [rospack.get_path(pkg) for pkg in pkgs]
+        except rospkg.ResourceNotFound as e:
+            assert False, 'rospkg.ResourceNotFound: ' + str(e)
         try:
             path = rospack.get_path('cmake_modules')
         except rospkg.ResourceNotFound:
@@ -113,12 +117,12 @@ class TestRostopicOnline(unittest.TestCase):
         # every package in the ROS stack, which doesn't work.
 
         output, err = Popen([cmd], **kwds).communicate()
-        self._check_output([cmd], output, err)
+        self._check_output([cmd], output.decode(), err.decode())
 
         # run roswtf on a simple launch file online
         rospack = rospkg.RosPack()
         p = os.path.join(rospack.get_path('roswtf'), 'test', 'min.launch')
-        output = Popen([cmd, p], **kwds).communicate()[0]
+        output = Popen([cmd, p], **kwds).communicate()[0].decode()
         self._check_output([cmd, p], output)
 
     def _check_output(self, cmd, output, error=None):
@@ -127,13 +131,15 @@ class TestRostopicOnline(unittest.TestCase):
             'No errors or warnings' in output or 'Found 1 error' in output,
             'CMD[%s] OUTPUT[%s]%s' %
             (' '.join(cmd), output, '\nstderr[%s]' % error if error else ''))
-        if 'No errors or warnings' in output:
-            self.assert_('ERROR' not in output, 'OUTPUT[%s]' % output)
+        allowed_errors = 0
         if 'Found 1 error' in output:
             self.assert_(output.count('ERROR') == 1, 'OUTPUT[%s]' % output)
             self.assert_(
-                'Error: the rosdep view is empty' not in output,
+                'ROS Dep database not updated' in output,
                 'OUTPUT[%s]' % output)
+            allowed_errors += 1
+        if 'No errors or warnings' in output:
+            self.assert_(output.count('ERROR') <= allowed_errors, 'OUTPUT[%s]' % output)
 
 if __name__ == '__main__':
     rostest.run(PKG, NAME, TestRostopicOnline, sys.argv)

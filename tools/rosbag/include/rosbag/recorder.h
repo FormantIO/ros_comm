@@ -55,6 +55,7 @@
 #include <ros/time.h>
 
 #include <std_msgs/Empty.h>
+#include <std_msgs/String.h>
 #include <topic_tools/shape_shifter.h>
 
 #include "rosbag/bag.h"
@@ -96,6 +97,7 @@ struct ROSBAG_DECL RecorderOptions
     bool            append_date;
     bool            snapshot;
     bool            verbose;
+    bool            publish;
     CompressionType compression;
     std::string     prefix;
     std::string     name;
@@ -110,6 +112,7 @@ struct ROSBAG_DECL RecorderOptions
     std::string     node;
     unsigned long long min_space;
     std::string min_space_str;
+    ros::TransportHints transport_hints;
 
     std::vector<std::string> topics;
 };
@@ -185,6 +188,8 @@ private:
     boost::mutex                  check_disk_mutex_;
     ros::WallTime                 check_disk_next_;
     ros::WallTime                 warn_next_;
+
+    ros::Publisher                pub_begin_write;
 };
 
 } // namespace rosbag

@@ -36,6 +36,7 @@
 
 
 
+import errno
 import socket
 import sys
 import logging
@@ -306,13 +307,15 @@ class RegManager(RegistrationListener):
                 if cond is not None:
                     cond.release()
 
+            get_topic_manager().check_all()
+
             #call _connect_topic on all URIs as it can check to see whether
             #or not a connection exists.
             if uris and not self.handler.done:
                 for uri in uris:
                     # #1141: have to multithread this to prevent a bad publisher from hanging us
                     t = threading.Thread(target=self._connect_topic_thread, args=(topic, uri))
-                    t.setDaemon(True)
+                    t.daemon = True
                     t.start()
 
     def _connect_topic_thread(self, topic, uri):
@@ -371,8 +374,8 @@ class RegManager(RegistrationListener):
                     multi.unregisterService(caller_id, resolved_name, service_uri)
             multi()
         except socket.error as se:
-            (errno, msg) = se.args
-            if errno == 111 or errno == 61: #can't talk to master, nothing we can do about it
+            (se_errno, msg) = se.args
+            if se_errno == errno.ECONNREFUSED or se_errno == errno.ENODATA: #can't talk to master, nothing we can do about it
                 self.logger.warn("cannot unregister with master due to network issues")
             else:
                 self.logger.warn("unclean shutdown\n%s"%traceback.format_exc())

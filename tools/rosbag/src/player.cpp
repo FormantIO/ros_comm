@@ -40,12 +40,11 @@
   #include <sys/select.h>
 #endif
 
-#include <boost/foreach.hpp>
 #include <boost/format.hpp>
 
 #include "rosgraph_msgs/Clock.h"
 
-#define foreach BOOST_FOREACH
+#include <set>
 
 using std::map;
 using std::pair;
@@ -56,10 +55,15 @@ using ros::Exception;
 
 namespace rosbag {
 
+bool isLatching(const ConnectionInfo* c)
+{
+    ros::M_string::const_iterator header_iter = c->header->find("latching");
+    return (header_iter != c->header->end() && header_iter->second == "1");
+}
+
 ros::AdvertiseOptions createAdvertiseOptions(const ConnectionInfo* c, uint32_t queue_size, const std::string& prefix) {
     ros::AdvertiseOptions opts(prefix + c->topic, queue_size, c->md5sum, c->datatype, c->msg_def);
-    ros::M_string::const_iterator header_iter = c->header->find("latching");
-    opts.latch = (header_iter != c->header->end() && header_iter->second == "1");
+    opts.latch = isLatching(c);
     return opts;
 }
 
@@ -88,6 +92,8 @@ PlayerOptions::PlayerOptions() :
     duration(0.0f),
     keep_alive(false),
     wait_for_subscribers(false),
+    rate_control_topic(""),
+    rate_control_max_delay(1.0f),
     skip_empty(ros::DURATION_MAX)
 {
 }
@@ -116,7 +122,7 @@ Player::Player(PlayerOptions const& options) :
 }
 
 Player::~Player() {
-    foreach(shared_ptr<Bag> bag, bags_)
+    for (shared_ptr<Bag>& bag : bags_)
         bag->close();
 
     restoreTerminal();
@@ -126,7 +132,7 @@ void Player::publish() {
     options_.check();
 
     // Open all the bag files
-    foreach(string const& filename, options_.bags) {
+    for (string const& filename : options_.bags) {
         ROS_INFO("Opening %s", filename.c_str());
 
         try
@@ -156,12 +162,12 @@ void Player::publish() {
     
     // Publish all messages in the bags
     View full_view;
-    foreach(shared_ptr<Bag> bag, bags_)
+    for (shared_ptr<Bag>& bag : bags_)
         full_view.addQuery(*bag);
 
-    ros::Time initial_time = full_view.getBeginTime();
+    const auto full_initial_time = full_view.getBeginTime();
 
-    initial_time += ros::Duration(options_.time);
+    const auto initial_time = full_initial_time + ros::Duration(options_.time);
 
     ros::Time finish_time = ros::TIME_MAX;
     if (options_.has_duration)
@@ -174,10 +180,10 @@ void Player::publish() {
 
     if (options_.topics.empty())
     {
-      foreach(shared_ptr<Bag> bag, bags_)
+      for (shared_ptr<Bag>& bag : bags_)
         view.addQuery(*bag, initial_time, finish_time);
     } else {
-      foreach(shared_ptr<Bag> bag, bags_)
+      for (shared_ptr<Bag>& bag : bags_)
         view.addQuery(*bag, topics, initial_time, finish_time);
     }
 
@@ -189,24 +195,30 @@ void Player::publish() {
     }
 
     // Advertise all of our messages
-    foreach(const ConnectionInfo* c, view.getConnections())
+    for (const ConnectionInfo* c : view.getConnections())
     {
-        ros::M_string::const_iterator header_iter = c->header->find("callerid");
-        std::string callerid = (header_iter != c->header->end() ? header_iter->second : string(""));
-
-        string callerid_topic = callerid + c->topic;
-
-        map<string, ros::Publisher>::iterator pub_iter = publishers_.find(callerid_topic);
-        if (pub_iter == publishers_.end()) {
-
-            ros::AdvertiseOptions opts = createAdvertiseOptions(c, options_.queue_size, options_.prefix);
-
-            ros::Publisher pub = node_handle_.advertise(opts);
-            publishers_.insert(publishers_.begin(), pair<string, ros::Publisher>(callerid_topic, pub));
-
-            pub_iter = publishers_.find(callerid_topic);
-        }
+        advertise(c);
     }
+
+    if (options_.rate_control_topic != "")
+    {
+        std::cout << "Creating rate control topic subscriber..." << std::flush;
+
+        boost::shared_ptr<ros::Subscriber> sub(boost::make_shared<ros::Subscriber>());
+        ros::SubscribeOptions ops;
+        ops.topic = options_.rate_control_topic;
+        ops.queue_size = 10;
+        ops.md5sum = ros::message_traits::md5sum<topic_tools::ShapeShifter>();
+        ops.datatype = ros::message_traits::datatype<topic_tools::ShapeShifter>();
+        ops.helper = boost::make_shared<ros::SubscriptionCallbackHelperT<
+            const ros::MessageEvent<topic_tools::ShapeShifter const> &> >(
+                boost::bind(&Player::updateRateTopicTime, this, _1));
+
+        rate_control_sub_ = node_handle_.subscribe(ops);
+
+        std::cout << " done." << std::endl;
+    }
+
 
     std::cout << "Waiting " << options_.advertise_sleep.toSec() << " seconds after advertising topics..." << std::flush;
     options_.advertise_sleep.sleep();
@@ -216,8 +228,62 @@ void Player::publish() {
 
     paused_ = options_.start_paused;
 
-    if (options_.wait_for_subscribers)
-    {
+    // Publish last message from latch topics if the options_.time > 0.0:
+    if (options_.time > 0.0) {
+        // Retrieve all the latch topics before the initial time and create publishers if needed:
+        View full_latch_view;
+
+        if (options_.topics.empty()) {
+            for (const auto& bag : bags_) {
+                full_latch_view.addQuery(*bag, full_initial_time, initial_time);
+            }
+        } else {
+            for (const auto& bag : bags_) {
+                full_latch_view.addQuery(*bag, topics, full_initial_time, initial_time);
+            }
+        }
+
+        std::set<std::pair<std::string, std::string>> latch_topics;
+        for (const auto& c : full_latch_view.getConnections()) {
+            if (isLatching(c)) {
+                const auto header_iter = c->header->find("callerid");
+                const auto callerid = (header_iter != c->header->end() ? header_iter->second : string(""));
+
+                latch_topics.emplace(callerid, c->topic);
+
+                advertise(c);
+            }
+        }
+
+        if (options_.wait_for_subscribers){
+            waitForSubscribers();
+        }
+
+        // Publish the last message of each latch topic per callerid:
+        for (const auto& item : latch_topics) {
+            const auto& callerid = item.first;
+            const auto& topic = item.second;
+
+            View latch_view;
+            for (const auto& bag : bags_) {
+                latch_view.addQuery(*bag, TopicQuery(topic), full_initial_time, initial_time);
+            }
+
+            auto last_message = latch_view.end();
+            for (auto iter = latch_view.begin(); iter != latch_view.end(); ++iter) {
+                if (iter->getCallerId() == callerid) {
+                    last_message = iter;
+                }
+            }
+
+            if (last_message != latch_view.end()) {
+                const auto publisher = publishers_.find(callerid + topic);
+                ROS_ASSERT(publisher != publishers_.end());
+
+                publisher->second.publish(*last_message);
+            }
+        }
+    } else if (options_.wait_for_subscribers) {
         waitForSubscribers();
     }
 
@@ -229,6 +295,9 @@ void Player::publish() {
         start_time_ = view.begin()->getTime();
         time_translator_.setRealStartTime(start_time_);
         bag_length_ = view.getEndTime() - view.getBeginTime();
+
+        // Set the last rate control to now, so the program doesn't start delayed.
+        last_rate_control_ = start_time_;
 
         time_publisher_.setTime(start_time_);
 
@@ -245,7 +314,7 @@ void Player::publish() {
         paused_time_ = now_wt;
 
         // Call do-publish for each message
-        foreach(MessageInstance m, view) {
+        for (const MessageInstance& m : view) {
             if (!node_handle_.ok())
                 break;
 
@@ -269,6 +338,43 @@ void Player::publish() {
     ros::shutdown();
 }
 
+void Player::updateRateTopicTime(const ros::MessageEvent<topic_tools::ShapeShifter const>& msg_event)
+{
+    boost::shared_ptr<topic_tools::ShapeShifter const> const &ssmsg = msg_event.getConstMessage();
+    std::string def = ssmsg->getMessageDefinition();
+    size_t length = ros::serialization::serializationLength(*ssmsg);
+    
+    // Check the message definition.
+    std::istringstream f(def);
+    std::string s;
+    bool flag = false;
+    while(std::getline(f, s, '\n')) {
+        if (!s.empty() && s.find("#") != 0) {
+            // Does not start with #, is not a comment.
+            if (s.find("Header ") == 0) {
+                flag = true;
+            }
+            break;
+        }
+    }
+    // If the header is not the first element in the message according to the definition, throw an error.
+    if (!flag) {
+        std::cout << std::endl << "WARNING: Rate control topic is bad, header is not first. MSG may be malformed." << std::endl;
+        return;
+    }
+
+    std::vector<uint8_t> buffer(length);
+    ros::serialization::OStream ostream(&buffer[0], length);
+    ros::serialization::Serializer<topic_tools::ShapeShifter>::write(ostream, *ssmsg);
+
+    // Assuming that the header is the first several bytes of the message.
+    //uint32_t header_sequence_id   = buffer[0] | (uint32_t)buffer[1] << 8 | (uint32_t)buffer[2] << 16 | (uint32_t)buffer[3] << 24;
+    int32_t header_timestamp_sec  = buffer[4] | (uint32_t)buffer[5] << 8 | (uint32_t)buffer[6] << 16 | (uint32_t)buffer[7] << 24;
+    int32_t header_timestamp_nsec = buffer[8] | (uint32_t)buffer[9] << 8 | (uint32_t)buffer[10] << 16 | (uint32_t)buffer[11] << 24;
+
+    last_rate_control_ = ros::Time(header_timestamp_sec, header_timestamp_nsec);
+}
+
 void Player::printTime()
 {
     if (!options_.quiet) {
@@ -276,13 +382,19 @@ void Player::printTime()
         ros::Time current_time = time_publisher_.getTime();
         ros::Duration d = current_time - start_time_;
 
+
         if (paused_)
         {
-            printf("\r [PAUSED]   Bag Time: %13.6f   Duration: %.6f / %.6f     \r", time_publisher_.getTime().toSec(), d.toSec(), bag_length_.toSec());
+            printf("\r [PAUSED ]  Bag Time: %13.6f   Duration: %.6f / %.6f               \r", time_publisher_.getTime().toSec(), d.toSec(), bag_length_.toSec());
+        }
+        else if (delayed_)
+        {
+            ros::Duration time_since_rate = std::max(ros::Time::now() - last_rate_control_, ros::Duration(0));
+            printf("\r [DELAYED]  Bag Time: %13.6f   Duration: %.6f / %.6f   Delay: %.2f \r", time_publisher_.getTime().toSec(), d.toSec(), bag_length_.toSec(), time_since_rate.toSec());
         }
         else
         {
-            printf("\r [RUNNING]  Bag Time: %13.6f   Duration: %.6f / %.6f     \r", time_publisher_.getTime().toSec(), d.toSec(), bag_length_.toSec());
+            printf("\r [RUNNING]  Bag Time: %13.6f   Duration: %.6f / %.6f               \r", time_publisher_.getTime().toSec(), d.toSec(), bag_length_.toSec());
         }
         fflush(stdout);
     }
@@ -317,6 +429,7 @@ void Player::processPause(const bool paused, ros::WallTime &horizon)
   }
   else
   {
+    // Make sure time doesn't shift after leaving pause.
     ros::WallDuration shift = ros::WallTime::now() - paused_time_;
     paused_time_ = ros::WallTime::now();
 
@@ -332,13 +445,32 @@ void Player::waitForSubscribers() const
     bool all_topics_subscribed = false;
     std::cout << "Waiting for subscribers." << std::endl;
     while (!all_topics_subscribed) {
-        all_topics_subscribed = true;
-        foreach(const PublisherMap::value_type& pub, publishers_) {
-            all_topics_subscribed &= pub.second.getNumSubscribers() > 0;
-        }
-        ros::Duration(0.1).sleep();
+        all_topics_subscribed = std::all_of(
+            std::begin(publishers_), std::end(publishers_),
+            [](const PublisherMap::value_type& pub) {
+                return pub.second.getNumSubscribers() > 0;
+            });
+        ros::WallDuration(0.1).sleep();
     }
     std::cout << "Finished waiting for subscribers." << std::endl;
+}
+
+void Player::advertise(const ConnectionInfo* c)
+{
+    ros::M_string::const_iterator header_iter = c->header->find("callerid");
+    std::string callerid = (header_iter != c->header->end() ? header_iter->second : string(""));
+
+    string callerid_topic = callerid + c->topic;
+
+    map<string, ros::Publisher>::iterator pub_iter = publishers_.find(callerid_topic);
+    if (pub_iter == publishers_.end()) {
+        ros::AdvertiseOptions opts = createAdvertiseOptions(c, options_.queue_size, options_.prefix);
+
+        ros::Publisher pub = node_handle_.advertise(opts);
+        publishers_.insert(publishers_.begin(), pair<string, ros::Publisher>(callerid_topic, pub));
+
+        pub_iter = publishers_.find(callerid_topic);
+    }
 }
 
 void Player::doPublish(MessageInstance const& m) {
@@ -356,6 +488,9 @@ void Player::doPublish(MessageInstance const& m) {
 
     map<string, ros::Publisher>::iterator pub_iter = publishers_.find(callerid_topic);
     ROS_ASSERT(pub_iter != publishers_.end());
+
+    // Update subscribers.
+    ros::spinOnce();
 
     // If immediate specified, play immediately
     if (options_.at_once) {
@@ -393,7 +528,16 @@ void Player::doPublish(MessageInstance const& m) {
         }
     }
 
-    while ((paused_ || !time_publisher_.horizonReached()) && node_handle_.ok())
+    // Check if the rate control topic has posted recently enough to continue, or if a delay is needed.
+    // Delayed is separated from paused to allow more verbose printing.
+    if (rate_control_sub_ != NULL) {
+        if ((time_publisher_.getTime() - last_rate_control_).toSec() > options_.rate_control_max_delay) {
+            delayed_ = true;
+            paused_time_ = ros::WallTime::now();
+        }
+    }
+
+    while ((paused_ || delayed_ || !time_publisher_.horizonReached()) && node_handle_.ok())
     {
         bool charsleftorpaused = true;
         while (charsleftorpaused && node_handle_.ok())
@@ -436,6 +580,25 @@ void Player::doPublish(MessageInstance const& m) {
                 {
                     printTime();
                     time_publisher_.runStalledClock(ros::WallDuration(.1));
+                    ros::spinOnce();
+                }
+                else if (delayed_)
+                {
+                    printTime();
+                    time_publisher_.runStalledClock(ros::WallDuration(.1));
+                    ros::spinOnce();
+                    // You need to check the rate here too.
+                    if(rate_control_sub_ == NULL || (time_publisher_.getTime() - last_rate_control_).toSec() <= options_.rate_control_max_delay) {
+                        delayed_ = false;
+                        // Make sure time doesn't shift after leaving delay.
+                        ros::WallDuration shift = ros::WallTime::now() - paused_time_;
+                        paused_time_ = ros::WallTime::now();
+         
+                        time_translator_.shift(ros::Duration(shift.sec, shift.nsec));
+
+                        horizon += shift;
+                        time_publisher_.setWCHorizon(horizon);
+                    }
                 }
                 else
                     charsleftorpaused = false;
@@ -444,6 +607,7 @@ void Player::doPublish(MessageInstance const& m) {
 
         printTime();
         time_publisher_.runClock(ros::WallDuration(.1));
+        ros::spinOnce();
     }
 
     pub_iter->second.publish(m);
@@ -464,6 +628,9 @@ void Player::doKeepAlive() {
         return;
     }
 
+    // If we're done and just staying alive, don't watch the rate control topic. We aren't publishing anyway.
+    delayed_ = false;
+
     while ((paused_ || !time_publisher_.horizonReached()) && node_handle_.ok())
     {
         bool charsleftorpaused = true;
@@ -477,6 +644,7 @@ void Player::doKeepAlive() {
                 }
                 else
                 {
+                    // Make sure time doesn't shift after leaving pause.
                     ros::WallDuration shift = ros::WallTime::now() - paused_time_;
                     paused_time_ = ros::WallTime::now();
          
@@ -491,6 +659,7 @@ void Player::doKeepAlive() {
                 {
                     printTime();
                     time_publisher_.runStalledClock(ros::WallDuration(.1));
+                    ros::spinOnce();
                 }
                 else
                     charsleftorpaused = false;
@@ -499,6 +668,7 @@ void Player::doKeepAlive() {
 
         printTime();
         time_publisher_.runClock(ros::WallDuration(.1));
+        ros::spinOnce();
     }
 }
 

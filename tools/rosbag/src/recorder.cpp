@@ -48,7 +48,6 @@
 #include <sstream>
 #include <string>
 
-#include <boost/foreach.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/regex.hpp>
 #include <boost/thread.hpp>
@@ -61,8 +60,6 @@
 #include "ros/network.h"
 #include "ros/xmlrpc_manager.h"
 #include "xmlrpcpp/XmlRpc.h"
-
-#define foreach BOOST_FOREACH
 
 using std::cout;
 using std::endl;
@@ -99,6 +96,7 @@ RecorderOptions::RecorderOptions() :
     append_date(true),
     snapshot(false),
     verbose(false),
+    publish(false),
     compression(compression::Uncompressed),
     prefix(""),
     name(""),
@@ -108,6 +106,7 @@ RecorderOptions::RecorderOptions() :
     limit(0),
     split(false),
     max_size(0),
+    max_splits(0),
     max_duration(-1.0),
     node(""),
     min_space(1024 * 1024 * 1024),
@@ -151,13 +150,18 @@ int Recorder::run() {
     if (!nh.ok())
         return 0;
 
+    if (options_.publish)
+    {
+        pub_begin_write = nh.advertise<std_msgs::String>("begin_write", 1, true);
+    }
+
     last_buffer_warn_ = Time();
     queue_ = new std::queue<OutgoingMessage>;
 
     // Subscribe to each topic
     if (!options_.regex) {
-    	foreach(string const& topic, options_.topics)
-			subscribe(topic);
+    	for (string const& topic : options_.topics)
+            subscribe(topic);
     }
 
     if (!ros::Time::waitForValid(ros::WallDuration(2.0)))
@@ -195,20 +199,18 @@ int Recorder::run() {
         check_master_timer = nh.createTimer(ros::Duration(1.0), boost::bind(&Recorder::doCheckMaster, this, _1, boost::ref(nh)));
     }
 
-    ros::MultiThreadedSpinner s(10);
-    ros::spin(s);
-
-    queue_condition_.notify_all();
+    ros::AsyncSpinner s(10);
+    s.start();
 
     record_thread.join();
-
+    queue_condition_.notify_all();
     delete queue_;
 
     return exit_code_;
 }
 
 shared_ptr<ros::Subscriber> Recorder::subscribe(string const& topic) {
-	ROS_INFO("Subscribing to %s", topic.c_str());
+    ROS_INFO("Subscribing to %s", topic.c_str());
 
     ros::NodeHandle nh;
     shared_ptr<int> count(boost::make_shared<int>(options_.limit));
@@ -222,6 +224,7 @@ shared_ptr<ros::Subscriber> Recorder::subscribe(string const& topic) {
     ops.helper = boost::make_shared<ros::SubscriptionCallbackHelperT<
         const ros::MessageEvent<topic_tools::ShapeShifter const> &> >(
             boost::bind(&Recorder::doQueue, this, _1, topic, sub, count));
+    ops.transport_hints = options_.transport_hints;
     *sub = nh.subscribe(ops);
 
     currently_recording_.insert(topic);
@@ -251,20 +254,17 @@ bool Recorder::shouldSubscribeToTopic(std::string const& topic, bool from_node) 
     
     if (options_.regex) {
         // Treat the topics as regular expressions
-        foreach(string const& regex_str, options_.topics) {
-            boost::regex e(regex_str);
-            boost::smatch what;
-            if (boost::regex_match(topic, what, e, boost::match_extra))
-                return true;
-        }
+	return std::any_of(
+            std::begin(options_.topics), std::end(options_.topics),
+            [&topic] (string const& regex_str){
+                boost::regex e(regex_str);
+                boost::smatch what;
+                return boost::regex_match(topic, what, e, boost::match_extra);
+            });
     }
-    else {
-        foreach(string const& t, options_.topics)
-            if (t == topic)
-                return true;
-    }
-    
-    return false;
+
+    return std::find(std::begin(options_.topics), std::end(options_.topics), topic)
+	    != std::end(options_.topics);
 }
 
 template<class T>
@@ -392,6 +392,13 @@ void Recorder::startWriting() {
         ros::shutdown();
     }
     ROS_INFO("Recording to %s.", target_filename_.c_str());
+
+    if (options_.publish)
+    {
+        std_msgs::String msg;
+        msg.data = target_filename_.c_str();
+        pub_begin_write.publish(msg);
+    }
 }
 
 void Recorder::stopWriting() {
@@ -471,7 +478,19 @@ void Recorder::doRecord() {
 
     // Schedule the disk space check
     warn_next_ = ros::WallTime();
-    checkDisk();
+
+    try
+    {
+        checkDisk();
+    }
+    catch (rosbag::BagException &ex)
+    {
+        ROS_ERROR_STREAM(ex.what());
+        exit_code_ = 1;
+        stopWriting();
+        return;
+    }
+
     check_disk_next_ = ros::WallTime::now() + ros::WallDuration().fromSec(20.0);
 
     // Technically the queue_mutex_ should be locked while checking empty.
@@ -517,8 +536,17 @@ void Recorder::doRecord() {
         if (checkDuration(out.time))
             break;
 
-        if (scheduledCheckDisk() && checkLogging())
-            bag_.write(out.topic, out.time, *out.msg, out.connection_header);
+        try
+        {
+            if (scheduledCheckDisk() && checkLogging())
+                bag_.write(out.topic, out.time, *out.msg, out.connection_header);
+        }
+        catch (rosbag::BagException &ex)
+        {
+            ROS_ERROR_STREAM(ex.what());
+            exit_code_ = 1;
+            break;
+        }
     }
 
     stopWriting();
@@ -567,10 +595,10 @@ void Recorder::doCheckMaster(ros::TimerEvent const& e, ros::NodeHandle& node_han
     (void)node_handle;
     ros::master::V_TopicInfo topics;
     if (ros::master::getTopics(topics)) {
-		foreach(ros::master::TopicInfo const& t, topics) {
-			if (shouldSubscribeToTopic(t.name))
-				subscribe(t.name);
-		}
+	for (ros::master::TopicInfo const& t : topics) {
+	    if (shouldSubscribeToTopic(t.name))
+	        subscribe(t.name);
+	}
     }
     
     if (options_.node != std::string(""))
@@ -672,9 +700,8 @@ bool Recorder::checkDisk() {
     }
     if ( info.available < options_.min_space)
     {
-        ROS_ERROR("Less than %s of space free on disk with %s.  Disabling recording.", options_.min_space_str.c_str(), bag_.getFileName().c_str());
         writing_enabled_ = false;
-        return false;
+        throw BagException("Less than " + options_.min_space_str + " of space free on disk with " + bag_.getFileName() + ". Disabling recording.");
     }
     else if (info.available < 5 * options_.min_space)
     {

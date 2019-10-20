@@ -49,9 +49,9 @@ namespace ros
  */
 namespace xmlrpc
 {
-XmlRpc::XmlRpcValue responseStr(int code, const std::string& msg, const std::string& response);
-XmlRpc::XmlRpcValue responseInt(int code, const std::string& msg, int response);
-XmlRpc::XmlRpcValue responseBool(int code, const std::string& msg, bool response);
+ROSCPP_DECL XmlRpc::XmlRpcValue responseStr(int code, const std::string& msg, const std::string& response);
+ROSCPP_DECL XmlRpc::XmlRpcValue responseInt(int code, const std::string& msg, int response);
+ROSCPP_DECL XmlRpc::XmlRpcValue responseBool(int code, const std::string& msg, bool response);
 }
 
 class XMLRPCCallWrapper;
@@ -80,7 +80,7 @@ public:
   }
 
   bool in_use_;
-  ros::WallTime last_use_time_; // for reaping
+  ros::SteadyTime last_use_time_; // for reaping
   XmlRpc::XmlRpcClient* client_;
 
   static const ros::WallDuration s_zombie_time_; // how long before it is toasted

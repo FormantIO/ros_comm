@@ -2,6 +2,74 @@
 Changelog for package roscpp
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+1.14.3 (2018-08-06)
+-------------------
+* add hasStarted() to Timer API (`#1464 <https://github.com/ros/ros_comm/issues/1464>`_)
+* fix compiler warnings about unused variables (`#1428 <https://github.com/ros/ros_comm/issues/1428>`_)
+
+1.14.2 (2018-06-06)
+-------------------
+
+1.14.1 (2018-05-21)
+-------------------
+
+1.14.0 (2018-05-21)
+-------------------
+* force a rebuild of the pollset on flag changes (`#1393 <https://github.com/ros/ros_comm/issues/1393>`_)
+* fix integer overflow for oneshot timers (`#1382 <https://github.com/ros/ros_comm/issues/1382>`_)
+* convert the period standard deviation in StatisticsLogger to Duration at the end (`#1361 <https://github.com/ros/ros_comm/issues/1361>`_)
+* add time when timer expired to timer events (`#1130 <https://github.com/ros/ros_comm/issues/1130>`_)
+* replace DCL pattern with static variable (`#1365 <https://github.com/ros/ros_comm/issues/1365>`_)
+* add parameter to stop clients from generating rosout topics list (`#1241 <https://github.com/ros/ros_comm/issues/1241>`_)
+
+1.13.6 (2018-02-05)
+-------------------
+* avoid recreating poll set (`#1281 <https://github.com/ros/ros_comm/pull/1281>`_)
+* switch to using epoll (`#1217 <https://github.com/ros/ros_comm/pull/1217>`_)
+* monotonic clock for callback queue timeouts (`#1250 <https://github.com/ros/ros_comm/pull/1250>`_)
+* fix IPv6 initialization order (`#1262 <https://github.com/ros/ros_comm/issues/1262>`_)
+* changed error message for single threaded spinner  (`#1164 <https://github.com/ros/ros_comm/pull/1164>`_)
+
+1.13.5 (2017-11-09)
+-------------------
+
+1.13.4 (2017-11-02)
+-------------------
+
+1.13.3 (2017-10-25)
+-------------------
+* avoid unused parameter warning in TransportTCP (`#1195 <https://github.com/ros/ros_comm/issues/1195>`_)
+* check if socket options are available before using them (`#1172 <https://github.com/ros/ros_comm/issues/1172>`_)
+
+1.13.2 (2017-08-15)
+-------------------
+* only use CLOCK_MONOTONIC if not on OS X (`#1142 <https://github.com/ros/ros_comm/issues/1142>`_)
+* xmlrpc_manager: use SteadyTime for timeout (`#1134 <https://github.com/ros/ros_comm/issues/1134>`_)
+* ignore headers with zero stamp in statistics (`#1127 <https://github.com/ros/ros_comm/issues/1127>`_)
+
+1.13.1 (2017-07-27)
+-------------------
+* add SteadyTimer, used in TimerManager (`#1014 <https://github.com/ros/ros_comm/issues/1014>`_)
+* include missing header for writev() (`#1105 <https://github.com/ros/ros_comm/pull/1105>`_)
+* clean the namespace to get rid of double or trailing forward slashes (`#1100 <https://github.com/ros/ros_comm/issues/1100>`_)
+* add missing mutex lock for publisher links (`#1090 <https://github.com/ros/ros_comm/pull/1090>`_)
+* fix race condition that lead to miss first message (`#1058 <https://github.com/ros/ros_comm/issues/1058>`_)
+* fix bug in transport_tcp on Windows (`#1050 <https://github.com/ros/ros_comm/issues/1050>`_)
+* add subscriber to connection log messages (`#1023 <https://github.com/ros/ros_comm/issues/1023>`_)
+* avoid deleting XmlRpcClient while being used in another thread (`#1013 <https://github.com/ros/ros_comm/issues/1013>`_)
+
+1.13.0 (2017-02-22)
+-------------------
+* remove support for multiple spinners on the same queue which existed only for backward compatibily (`#988 <https://github.com/ros/ros_comm/pull/988>`_)
+
+1.12.7 (2017-02-17)
+-------------------
+* move connection specific log message to new name roscpp_internal.connections (`#980 <https://github.com/ros/ros_comm/pull/980>`_)
+* move headers to include/xmlrpcpp (`#962 <https://github.com/ros/ros_comm/issues/962>`_)
+* fix UDP block number when EAGAIN or EWOULDBLOCK (`#957 <https://github.com/ros/ros_comm/issues/957>`_)
+* fix return code of master execute function (`#938 <https://github.com/ros/ros_comm/pull/938>`_)
+* change WallTimerEvent from class to struct (`#924 <https://github.com/ros/ros_comm/pull/924>`_)
+
 1.12.6 (2016-10-26)
 -------------------
 

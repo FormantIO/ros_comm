@@ -14,7 +14,9 @@ catkin_python_setup()
 # Support large bags (>2GB) on 32-bit systems
 add_definitions(-D_FILE_OFFSET_BITS=64)
 
-include_directories(include ${catkin_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS})
+include_directories(include ${catkin_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS}
+  ${BZIP2_INCLUDE_DIR}
+)
 
 catkin_package(
   LIBRARIES rosbag
@@ -26,13 +28,20 @@ add_library(rosbag
   src/recorder.cpp
   src/time_translator.cpp)
 
-target_link_libraries(rosbag ${catkin_LIBRARIES} ${Boost_LIBRARIES})
+target_link_libraries(rosbag ${catkin_LIBRARIES} ${Boost_LIBRARIES}
+  ${BZIP2_LIBRARIES}
+)
 
 add_executable(record src/record.cpp)
 target_link_libraries(record rosbag)
 
 add_executable(play src/play.cpp)
 target_link_libraries(play rosbag)
+
+if(NOT WIN32)
+  add_executable(encrypt src/encrypt.cpp)
+  target_link_libraries(encrypt ${catkin_LIBRARIES})
+endif()
 
 install(DIRECTORY include/${PROJECT_NAME}/
   DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
@@ -45,6 +54,12 @@ install(TARGETS record play
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+if(NOT WIN32)
+  install(TARGETS encrypt
+    ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+    LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+    RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+endif()
 catkin_install_python(PROGRAMS
   scripts/bag2png.py
   scripts/bagsort.py
@@ -58,3 +73,7 @@ catkin_install_python(PROGRAMS
   scripts/savemsg.py
   scripts/topic_renamer.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_nosetests(test)
+endif()

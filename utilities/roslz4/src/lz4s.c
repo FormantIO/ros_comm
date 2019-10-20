@@ -47,6 +47,16 @@
 #define DEBUG(...)
 #endif
 
+// Make sure the LZ4 library has the function we need
+// Note that the later versions of LZ4 contain a different macro that does this version math, but the earlier
+// versions lack it.
+#define LZ4_VERSION (LZ4_VERSION_MAJOR * 100 * 100 + LZ4_VERSION_MINOR * 100 + LZ4_VERSION_RELEASE)
+#if LZ4_VERSION >= 10701
+#define LZ4_COMPRESS_DEFAULT LZ4_compress_default
+#else
+#define LZ4_COMPRESS_DEFAULT LZ4_compress_limitedOutput
+#endif
+
 // magic numbers
 const uint32_t kMagicNumber = 0x184D2204;
 const uint32_t kEndOfStream = 0x00000000;
@@ -70,9 +80,11 @@ void writeUInt32(unsigned char *buffer, uint32_t val) {
   buffer[3] = (val >> 24) & 0xFF;
 }
 
+#ifndef _MSC_VER
 int min(int a, int b) {
   return a < b ? a : b;
 }
+#endif
 
 /*========================== Low level compression ==========================*/
 
@@ -181,10 +193,10 @@ int bufferToOutput(roslz4_stream *str) {
         state->buffer_offset, str->output_left);
 
   // Shrink output by 1 to detect if data is not compressible
-  uint32_t comp_size = LZ4_compress_limitedOutput(state->buffer,
-                                                  str->output_next + 4,
-                                                  (int) state->buffer_offset,
-                                                  (int) uncomp_size - 1);
+  uint32_t comp_size = LZ4_COMPRESS_DEFAULT(state->buffer,
+                                            str->output_next + 4,
+                                            (int) state->buffer_offset,
+                                            (int) uncomp_size - 1);
   uint32_t wrote;
   if (comp_size > 0) {
     DEBUG("bufferToOutput() Compressed to %i bytes\n", comp_size);
@@ -247,6 +259,14 @@ int streamStateAlloc(roslz4_stream *str) {
   state->finished = 0;
 
   state->xxh32_state = XXH32_init(0);
+  if (state->xxh32_state == NULL) {
+    if (state->buffer != NULL) {
+      free(state->buffer);
+    }
+    free(state);
+    str->state = NULL;
+    return ROSLZ4_MEMORY_ERROR; // Allocation failed
+  }
   state->stream_checksum = 0;
   state->stream_checksum_read = 0;
 
@@ -573,7 +593,10 @@ int roslz4_buffToBuffCompress(char *input, unsigned int input_size,
 
   int ret;
   ret = roslz4_compressStart(&stream, block_size_id);
-  if (ret != ROSLZ4_OK) { return ret; }
+  if (ret != ROSLZ4_OK) {
+    roslz4_compressEnd(&stream);
+    return ret;
+  }
 
   while (stream.input_left > 0 && ret != ROSLZ4_STREAM_END) {
     ret = roslz4_compress(&stream, ROSLZ4_FINISH);

@@ -53,6 +53,7 @@ rosbag::RecorderOptions parseOptions(int argc, char** argv) {
       ("regex,e", "match topics using regular expressions")
       ("exclude,x", po::value<std::string>(), "exclude topics matching regular expressions")
       ("quiet,q", "suppress console output")
+      ("publish,p", "Publish a msg when the record begin")
       ("output-prefix,o", po::value<std::string>(), "prepend PREFIX to beginning of bag name")
       ("output-name,O", po::value<std::string>(), "record bagnamed NAME.bag")
       ("buffsize,b", po::value<int>()->default_value(256), "Use an internal buffer of SIZE MB (Default: 256)")
@@ -62,11 +63,13 @@ rosbag::RecorderOptions parseOptions(int argc, char** argv) {
       ("bz2,j", "use BZ2 compression")
       ("lz4", "use LZ4 compression")
       ("split", po::value<int>()->implicit_value(0), "Split the bag file and continue recording when maximum size or maximum duration reached.")
-      ("max-splits", po::value<int>()->default_value(0), "Keep a maximum of N bag files, when reaching the maximum erase the oldest one to keep a constant number of files.")
+      ("max-splits", po::value<int>(), "Keep a maximum of N bag files, when reaching the maximum erase the oldest one to keep a constant number of files.")
       ("topic", po::value< std::vector<std::string> >(), "topic to record")
       ("size", po::value<uint64_t>(), "The maximum size of the bag to record in MB.")
       ("duration", po::value<std::string>(), "Record a bag of maximum duration in seconds, unless 'm', or 'h' is appended.")
-      ("node", po::value<std::string>(), "Record all topics subscribed to by a specific node.");
+      ("node", po::value<std::string>(), "Record all topics subscribed to by a specific node.")
+      ("tcpnodelay", "Use the TCP_NODELAY transport hint when subscribing to topics.")
+      ("udp", "Use the UDP transport hint when subscribing to topics.");
 
   
     po::positional_options_description p;
@@ -101,6 +104,8 @@ rosbag::RecorderOptions parseOptions(int argc, char** argv) {
     }
     if (vm.count("quiet"))
       opts.quiet = true;
+    if (vm.count("publish"))
+      opts.publish = true;
     if (vm.count("output-prefix"))
     {
       opts.prefix = vm["output-prefix"].as<std::string>();
@@ -121,7 +126,7 @@ rosbag::RecorderOptions parseOptions(int argc, char** argv) {
         ROS_WARN("Use of \"--split <MAX_SIZE>\" has been deprecated.  Please use --split --size <MAX_SIZE> or --split --duration <MAX_DURATION>");
         if (S < 0)
           throw ros::Exception("Split size must be 0 or positive");
-        opts.max_size = 1048576 * S;
+        opts.max_size = 1048576 * static_cast<uint64_t>(S);
       }
     }
     if(vm.count("max-splits"))
@@ -237,6 +242,14 @@ rosbag::RecorderOptions parseOptions(int argc, char** argv) {
     {
       opts.node = vm["node"].as<std::string>();
       std::cout << "Recording from: " << opts.node << std::endl;
+    }
+    if (vm.count("tcpnodelay"))
+    {
+      opts.transport_hints.tcpNoDelay();
+    }
+    if (vm.count("udp"))
+    {
+      opts.transport_hints.udp();
     }
 
     // Every non-option argument is assumed to be a topic
