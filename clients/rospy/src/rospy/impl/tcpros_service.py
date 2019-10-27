@@ -37,7 +37,6 @@ import opentracing
 import logging
 from opentracing_instrumentation.request_context import get_current_span, span_in_stack_context
 from jaeger_client import Config
-
 #### /OPENTRACING ####
 
 import io
@@ -433,12 +432,8 @@ class ServiceProxy(_Service):
         self.transport = None #for saving persistent connections
 
         #### OPENTRACING ####
-        log_level = logging.DEBUG
-        logging.getLogger('').handlers = []
-        logging.basicConfig(format='%(asctime)s %(message)s', level=log_level)
-
         config = Config(
-            config={ # usually read from some yaml config
+            config={
                 'sampler': {
                     'type': 'const',
                     'param': 1,
@@ -532,11 +527,10 @@ class ServiceProxy(_Service):
         parent_span = get_current_span()
         # Create a new span for this request
         span = opentracing.tracer.start_span(operation_name=self.resolved_name + "_client", child_of=parent_span)
-        span.log_event('service invoked', payload={'request': str(request)})
+        span.log_event('service called', payload={'request': str(request)})
         # Inject headers for this request
         headers = self.headers
         opentracing.tracer.inject(span, opentracing.Format.HTTP_HEADERS, headers)
-        rospy.logerr("injected headers: %s", headers)
         self.protocol = TCPROSServiceClient(self.resolved_name,
                                             self.service_class, headers=headers)
         #### /OPENTRACING #####
@@ -630,12 +624,8 @@ class ServiceImpl(_Service):
         logdebug("[%s]: new Service instance"%self.resolved_name)
 
         #### OPENTRACING ####
-        log_level = logging.DEBUG
-        logging.getLogger('').handlers = []
-        logging.basicConfig(format='%(asctime)s %(message)s', level=log_level)
-
         config = Config(
-            config={ # usually read from some yaml config
+            config={
                 'sampler': {
                     'type': 'const',
                     'param': 1,
@@ -708,7 +698,7 @@ class ServiceImpl(_Service):
             transport.write_buff.write(struct.pack('<B', 1))
             transport.send_message(response, self.seq)
             #### OPENTRACING ####
-            get_current_span().log_event('service executed', payload={'response': str(response)})
+            get_current_span().log_event('service request handled', payload={'response': str(response)})
             #### /OPENTRACING ####
         except ServiceException as e:
             rospy.core.rospydebug("handler raised ServiceException: %s"%(e))
@@ -743,9 +733,6 @@ class ServiceImpl(_Service):
             format=opentracing.Format.HTTP_HEADERS,
             carrier=header
         )
-        extracted_context_str = '{:x}:{:x}:{:x}:{:x}'.format(extracted_context.trace_id, extracted_context.span_id, (extracted_context.parent_id or 0), extracted_context.flags)
-        rospy.core.logerr("extracted_context: %s" % extracted_context_str)
-
         span = opentracing.tracer.start_span(operation_name=self.resolved_name, child_of=extracted_context)
         with span_in_stack_context(span) as deactivate_cb:
         #### /OPENTRACING ####
