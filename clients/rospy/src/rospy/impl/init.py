@@ -44,6 +44,8 @@ import logging
 import time
 import traceback
 
+from prometheus_client import start_http_server
+
 import rosgraph
 import rosgraph.roslogging
 import rosgraph.xmlrpc
@@ -100,6 +102,10 @@ def start_node(environ, resolved_name, master_uri=None, port=0, tcpros_port=0):
     while not node.uri and not is_shutdown():
         time.sleep(0.00001) #poll for XMLRPC init
     logging.getLogger("rospy.init").info("ROS Slave URI: [%s]", node.uri)
+
+    metrics_port = environ.get("METRICS_PORT")
+    if metrics_port and str.isdigit(metrics_port):
+        start_http_server(int(metrics_port))
 
     while not handler._is_registered() and not is_shutdown():
         time.sleep(0.1) #poll for master registration

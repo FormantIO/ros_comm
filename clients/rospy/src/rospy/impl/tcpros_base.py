@@ -64,6 +64,12 @@ from rospy.service import ServiceException
 
 from rospy.impl.transport import Transport, BIDIRECTIONAL
 
+from prometheus_client import Counter
+c_bytes_tx = Counter('rosnode_written_bytes_total', 'Bytes read', ['node', 'topic', 'type'])
+c_bytes_rx = Counter('rosnode_read_bytes_total', 'Bytes written', ['node', 'topic', 'type'])
+c_msg_count_tx = Counter('rosnode_messages_written_total', 'Messages sent', ['node', 'topic', 'type'])
+c_msg_count_rx = Counter('rosnode_messages_read_total', 'Messages read', ['node', 'topic', 'type'])
+
 logger = logging.getLogger('rospy.tcpros')
 
 # Receive buffer size for topics/services (in bytes)
@@ -637,7 +643,9 @@ class TCPROSTransport(Transport):
 
         logger.debug("[%s]: writing header", self.name)
         sock.setblocking(1)
-        self.stat_bytes += write_ros_handshake_header(sock, protocol.get_header_fields())
+        bytes_written = write_ros_handshake_header(sock, protocol.get_header_fields())
+        self.stat_bytes += bytes_written
+        c_bytes_tx.labels(node=rospy.names.get_name(), topic=self.name, type=self.type).inc(bytes_written)
         if poller:
             poller.unregister(fileno)
 
@@ -685,8 +693,10 @@ class TCPROSTransport(Transport):
         try:
             #TODO: get rid of sendalls and replace with async-style publishing
             self.socket.sendall(data)
-            self.stat_bytes  += len(data)
+            self.stat_bytes += len(data)
+            c_bytes_tx.labels(node=rospy.names.get_name(), topic=self.name, type=self.type).inc(len(data))
             self.stat_num_msg += 1
+            c_msg_count_tx.labels(node=rospy.names.get_name(), topic=self.name, type=self.type).inc()
         except IOError as ioe:
             #for now, just document common errno's in code
             (ioe_errno, msg) = ioe.args
@@ -732,8 +742,12 @@ class TCPROSTransport(Transport):
                 if b.tell() >= 4:
                     p.read_messages(b, msg_queue, sock) 
                 if not msg_queue:
-                    self.stat_bytes += recv_buff(sock, b, p.buff_size)
+                    bytes_read = recv_buff(sock, b, p.buff_size)
+                    self.stat_bytes += bytes_read
+                    c_bytes_rx.labels(node=rospy.names.get_name(), topic=self.name, type=self.type).inc(bytes_read)
             self.stat_num_msg += len(msg_queue) #STATS
+            c_msg_count_rx.labels(node=rospy.names.get_name(), topic=self.name, type=self.type).inc(len(msg_queue))
+
             # set the _connection_header field
             for m in msg_queue:
                 m._connection_header = self.header
