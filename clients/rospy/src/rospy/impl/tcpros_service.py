@@ -64,6 +64,9 @@ import rospy.impl.validators
 
 import threading
 
+from prometheus_client import Summary
+s_service_request_latency = Summary('rosnode_service_execution_time_seconds', 'Service execution time', ['node', 'name', 'type'])
+
 if sys.hexversion > 0x03000000: #Python3
     def isstring(s):
         return isinstance(s, str) #Python 3.x
@@ -666,7 +669,8 @@ class ServiceImpl(_Service):
             try:
                 requests = transport.receive_once()
                 for request in requests:
-                    self._handle_request(transport, request)
+                    with s_service_request_latency.labels(node=rospy.names.get_name(), name=self.resolved_name, type=self.service_class._type).time():
+                        self._handle_request(transport, request)
                 if not persistent:
                     handle_done = True
             except rospy.exceptions.TransportTerminated as e:
