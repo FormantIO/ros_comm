@@ -46,6 +46,8 @@
   <exec_depend version_gte="1.10.3">rosgraph_msgs</exec_depend>
   <exec_depend>roslib</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>jaeger-client</exec_depend>
+  <exec_depend>opentracing_instrumentation</exec_depend>
 
   <export>
     <rosdoc config="rosdoc.yaml"/>
